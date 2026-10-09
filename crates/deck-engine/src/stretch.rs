@@ -9,6 +9,17 @@ pub struct Stretcher {
     preroll: usize,
 }
 
+/// Signalsmith's presets. The deck plays with `Cheaper`; `deck-sim ab`
+/// renders both for listening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Quality {
+    /// 100 ms blocks, 40 ms interval, computation split across calls.
+    Cheaper,
+    /// 120 ms blocks, 30 ms interval, all in one go: about 7× the worst-case
+    /// callback cost.
+    Default,
+}
+
 impl std::fmt::Debug for Stretcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Stretcher").field("preroll", &self.preroll).finish_non_exhaustive()
@@ -18,12 +29,20 @@ impl std::fmt::Debug for Stretcher {
 impl Stretcher {
     #[must_use]
     pub fn new(sample_rate: u32) -> Self {
+        Self::with_quality(sample_rate, Quality::Cheaper)
+    }
+
+    #[must_use]
+    pub fn with_quality(sample_rate: u32, quality: Quality) -> Self {
         // presetCheaper: 100 ms block, 40 ms interval, and split computation,
         // which spreads each FFT step across calls instead of landing it all
         // in one callback. Measured: callback p99 dropped from 148 µs to 22 µs
         // on an M4 (presetDefault doesn't split). Costs one interval of
         // latency, which `lead` compensates for.
-        let inner = signalsmith_stretch::Stretch::preset_cheaper(2, sample_rate);
+        let inner = match quality {
+            Quality::Cheaper => signalsmith_stretch::Stretch::preset_cheaper(2, sample_rate),
+            Quality::Default => signalsmith_stretch::Stretch::preset_default(2, sample_rate),
+        };
         // Seek wants at least one block plus one interval of history.
         let preroll = (sample_rate as usize * 15).div_ceil(100) + 1;
         Self { inner, preroll }

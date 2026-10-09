@@ -143,7 +143,14 @@ cargo run --release -p deck-sim -- frame out.png --loop 4    # render the screen
 cargo run --release -p deck-sim -- frame out.png --decks 2   # two decks with the phase meter
 cargo run --release -p deck-sim -- browser out.png --open "Collection"   # the browser
 cargo run --release -p deck-sim -- rekordbox bench           # our detector vs your Rekordbox grids
+cargo run --release -p deck-sim -- frame out.png --link 135  # alone on Link: phase against the session
+cargo run --release -p deck-sim -- frame out.png --fader -5  # a tempo fader that hasn't caught up
+cargo run --release -p deck-sim -- ab track.mp3 --tempo 6    # key lock listening test (target/ab)
 ```
+
+`ab` renders the same 30 s of a track as it is, sped up without key lock,
+and with key lock in the deck's preset and Signalsmith's heavier one, for
+comparing by ear.
 
 ## Tests
 

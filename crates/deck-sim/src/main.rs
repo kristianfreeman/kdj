@@ -7,7 +7,9 @@
 //!   deck-sim frame OUT.png [--at SECS] [--loop BEATS] [--scale N] [--decks 2] [--link BPM] [--fader PCT]
 //!   deck-sim rekordbox list|bench [--count N]   (local Rekordbox collection)
 //!   deck-sim browser OUT.png [--open A/B] [--cursor N]   (browser: your library + a fake USB)
+//!   deck-sim ab TRACK [--tempo PCT] [--at SECS] [--secs N] [--out DIR]   (key lock listening test)
 
+mod ab;
 mod alloc_guard;
 mod perf;
 mod rekordbox;
@@ -52,6 +54,7 @@ fn run() -> Result<bool> {
         "synth" => synth(&opts),
         "frame" => frame(&opts),
         "browser" => browser_frame(&opts),
+        "ab" => ab::run(&opts),
         "rekordbox" => match opts.positional.first().map(String::as_str) {
             Some("list") => rekordbox::list(SAMPLE_RATE),
             Some("probe") => rekordbox::probe(SAMPLE_RATE),
