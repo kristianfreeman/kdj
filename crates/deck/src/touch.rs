@@ -40,7 +40,7 @@ impl Touch {
             Target::Needle => {
                 app.slots[slot].deck.needle(hit.fraction(x));
             }
-            Target::Row(_) | Target::Back => {}
+            Target::Row(_) | Target::Back | Target::Page(_) | Target::Choice(..) | Target::Setting(_) => {}
         }
         self.down = Some(Down { slot, hit, start_y: y, scrolled: None });
     }
@@ -63,7 +63,7 @@ impl Touch {
                 app.browser.scroll_by(rows - done);
                 d.scrolled = Some(rows);
             }
-            Target::Action(_) | Target::Back => {}
+            Target::Action(_) | Target::Back | Target::Page(_) | Target::Choice(..) | Target::Setting(_) => {}
         }
     }
 
@@ -79,6 +79,15 @@ impl Touch {
                 }
             }
             Target::Back => app.act(Action::BrowseBack, Edge::Press, d.slot),
+            Target::Page(i) => app.settings.select_page(i),
+            Target::Choice(row, option) => {
+                app.settings.choose(row, option);
+            }
+            Target::Setting(row) => {
+                if let Some(key) = app.settings.press(row) {
+                    app.setting_action(key);
+                }
+            }
             Target::Row(_) | Target::Needle => {}
         }
     }

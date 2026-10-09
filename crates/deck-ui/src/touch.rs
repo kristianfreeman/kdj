@@ -18,6 +18,12 @@ pub enum Target {
     Row(usize),
     /// Back out one browser level.
     Back,
+    /// A settings page, in the page list.
+    Page(usize),
+    /// A settings row's option: (row, option).
+    Choice(usize, usize),
+    /// A settings row's action button.
+    Setting(usize),
 }
 
 /// A target and the rectangle (x, y, w, h) it was drawn in.
@@ -44,6 +50,11 @@ pub struct Targets {
 impl Targets {
     pub fn clear(&mut self) {
         self.items.clear();
+    }
+
+    /// Every target, in drawing order.
+    pub fn iter(&self) -> impl Iterator<Item = Target> + '_ {
+        self.items.iter().map(|h| h.target)
     }
 
     pub fn add(&mut self, rect: [f32; 4], target: Target) {

@@ -22,7 +22,7 @@ const STYLES: [(Style, bool, f32); 4] =
 
 /// Every style gets printable ASCII and these symbols. List text (Label,
 /// Body) also gets Latin-1 and Latin Extended-A, for artist names.
-const EXTRA: [char; 10] = ['±', '·', '–', '−', 'µ', '…', '↵', '←', '→', '›'];
+const EXTRA: [char; 12] = ['±', '·', '–', '−', 'µ', '…', '↵', '←', '→', '↑', '↓', '›'];
 /// Characters below this are indexed directly; EXTRA follows.
 const DIRECT_END: char = '\u{180}';
 const DIRECT: usize = DIRECT_END as usize;

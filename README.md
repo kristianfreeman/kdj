@@ -146,6 +146,7 @@ cargo run --release -p deck-sim -- rekordbox bench           # our detector vs y
 cargo run --release -p deck-sim -- frame out.png --link 135  # alone on Link: phase against the session
 cargo run --release -p deck-sim -- frame out.png --fader -5  # a tempo fader that hasn't caught up
 cargo run --release -p deck-sim -- ab track.mp3 --tempo 6    # key lock listening test (target/ab)
+cargo run --release -p deck-sim -- story                     # every screen state on one page (target/storybook)
 ```
 
 `ab` renders the same 30 s of a track as it is, sped up without key lock,

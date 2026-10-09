@@ -7,6 +7,7 @@
 //!   deck-sim frame OUT.png [--at SECS] [--loop BEATS] [--scale N] [--decks 2] [--link BPM] [--fader PCT]
 //!   deck-sim rekordbox list|bench [--count N]   (local Rekordbox collection)
 //!   deck-sim browser OUT.png [--open A/B] [--cursor N]   (browser: your library + a fake USB)
+//!   deck-sim story [DIR]   (every screen state, as an HTML page; default target/storybook)
 //!   deck-sim ab TRACK [--tempo PCT] [--at SECS] [--secs N] [--out DIR]   (key lock listening test)
 
 mod ab;
@@ -16,6 +17,7 @@ mod rekordbox;
 mod scenario;
 mod screen;
 mod sim;
+mod story;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -55,6 +57,7 @@ fn run() -> Result<bool> {
         "frame" => frame(&opts),
         "browser" => browser_frame(&opts),
         "ab" => ab::run(&opts),
+        "story" => story::run(&opts),
         "rekordbox" => match opts.positional.first().map(String::as_str) {
             Some("list") => rekordbox::list(SAMPLE_RATE),
             Some("probe") => rekordbox::probe(SAMPLE_RATE),
@@ -307,8 +310,7 @@ fn frame(opts: &Opts) -> Result<bool> {
 /// drills in by item names ("A/B/C"); several paths separated by ";" render
 /// one PNG each (OUT-0.png, OUT-1.png, …) in one go.
 fn browser_frame(opts: &Opts) -> Result<bool> {
-    use deck_library::{library, nav};
-    use deck_ui::browser::{self, Browser};
+    use deck_library::library;
     let out =
         Path::new(opts.positional.first().ok_or_else(|| anyhow!("usage: deck-sim browser OUT.png [--open A/B;C]"))?);
     let t = std::time::Instant::now();
@@ -326,21 +328,7 @@ fn browser_frame(opts: &Opts) -> Result<bool> {
 
     let paths: Vec<&str> = opts.flag("open").unwrap_or("").split(';').collect();
     for (k, path) in paths.iter().enumerate() {
-        let mut b = Browser::new(true);
-        b.scanning = false;
-        let (level, nodes) = browser::level_for(&libs, nav::root(&libs));
-        b.reset(level);
-        let mut current = nodes;
-        for name in path.split('/').filter(|n| !n.is_empty()) {
-            let i = current
-                .iter()
-                .position(|&n| nav::title(&libs, n).trim() == name.trim())
-                .ok_or_else(|| anyhow!("no {name:?} here"))?;
-            b.move_by(isize::try_from(i)?);
-            let (level, nodes) = browser::level_for(&libs, current[i]);
-            b.push(level);
-            current = nodes;
-        }
+        let mut b = browse_to(&libs, path)?;
         b.move_by(cursor);
         let file = if paths.len() == 1 {
             out.to_path_buf()
@@ -355,6 +343,29 @@ fn browser_frame(opts: &Opts) -> Result<bool> {
 }
 
 /// Silence with a plain 134 BPM grid: enough to run a deck without analysis.
+/// A browser opened at `path` ("A/B/C", by item names), as if each step
+/// had been opened by hand.
+fn browse_to(libs: &[deck_library::library::Library], path: &str) -> Result<deck_ui::browser::Browser> {
+    use deck_library::nav;
+    use deck_ui::browser::{self, Browser};
+    let mut b = Browser::new(true);
+    b.scanning = false;
+    let (level, nodes) = browser::level_for(libs, nav::root(libs));
+    b.reset(level);
+    let mut current = nodes;
+    for name in path.split('/').filter(|n| !n.is_empty()) {
+        let i = current
+            .iter()
+            .position(|&n| nav::title(libs, n).trim() == name.trim())
+            .ok_or_else(|| anyhow!("no {name:?} here"))?;
+        b.move_by(isize::try_from(i)?);
+        let (level, nodes) = browser::level_for(libs, current[i]);
+        b.push(level);
+        current = nodes;
+    }
+    Ok(b)
+}
+
 fn silent_track(secs: usize) -> Track {
     use deck_engine::track::{GridSource, HOT_CUES, Waveform};
     Track {

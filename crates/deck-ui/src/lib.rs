@@ -5,6 +5,7 @@ pub mod browser;
 pub mod draw;
 pub mod gpu;
 pub mod scene;
+pub mod settings;
 pub mod text;
 pub mod touch;
 
@@ -14,6 +15,14 @@ use anyhow::Result;
 use deck_engine::{Snapshot, Track};
 
 pub use scene::{HEIGHT, OVERVIEW, View, WIDTH, ZOOM_BEATS};
+
+/// A full-screen page over the deck, drawn instead of it while open.
+#[derive(Debug)]
+pub enum Overlay<'a> {
+    None,
+    Browser(&'a mut browser::Browser),
+    Settings(&'a mut settings::Settings),
+}
 
 #[derive(Debug)]
 pub struct Ui {
@@ -55,22 +64,31 @@ impl Ui {
             if out { (self.view.zoom + 1).min(ZOOM_BEATS.len() - 1) } else { self.view.zoom.saturating_sub(1) };
     }
 
-    /// Build this frame's draw data: the browser if it's open, otherwise the
-    /// deck. Returns the CPU time it took.
-    /// `other`: the other deck, when two run side by side (for the phase meter).
+    /// Build this frame's draw data: a full-screen overlay (browser,
+    /// settings) if one is open, otherwise the deck. Returns the CPU time it
+    /// took. `other`: the other deck, when two run side by side (for the
+    /// phase meter).
     pub fn build(
         &mut self,
         snap: &Snapshot,
         other: Option<&Snapshot>,
-        browser: Option<&mut browser::Browser>,
+        overlay: Overlay<'_>,
         status: &str,
         hud: &str,
     ) -> Duration {
         let t = Instant::now();
-        if let Some(b) = browser.filter(|b| b.open) {
-            self.scene.frame.clear();
-            b.draw(&mut self.scene.frame, &self.atlas, snap, status);
-            return t.elapsed();
+        match overlay {
+            Overlay::Settings(s) if s.open => {
+                self.scene.frame.clear();
+                s.draw(&mut self.scene.frame, &self.atlas, status);
+                return t.elapsed();
+            }
+            Overlay::Browser(b) if b.open => {
+                self.scene.frame.clear();
+                b.draw(&mut self.scene.frame, &self.atlas, snap, status);
+                return t.elapsed();
+            }
+            _ => {}
         }
         let info = self.track.as_ref().map(|(title, hop, cols, ov, rb)| scene::TrackInfo {
             title,

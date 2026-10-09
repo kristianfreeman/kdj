@@ -61,6 +61,7 @@ const DEFAULT: &[(&str, Action)] = {
         ("M", Action::Master),
         ("Tab", Browse),
         ("\\", SwitchDeck),
+        ("O", Action::Settings),
         ("F1", HotCue1),
         ("F2", HotCue2),
         ("F3", HotCue3),

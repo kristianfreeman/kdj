@@ -44,6 +44,7 @@ use deck_library::nav::{self, Node};
 use deck_library::{anlz, library};
 use deck_ui::Ui;
 use deck_ui::browser::{self, Browser};
+use deck_ui::settings::{self, Settings};
 use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Mod};
 use sdl2::mouse::MouseButton;
@@ -233,6 +234,7 @@ struct App {
     shared_focus: Arc<AtomicUsize>,
     hud: Hud,
     browser: Browser,
+    settings: Settings,
     libs: Vec<library::Library>,
     /// The library node behind each browser item, level by level.
     nav: Vec<Vec<Node>>,
@@ -252,6 +254,13 @@ impl App {
             return;
         }
         if e == Edge::Release {
+            return;
+        }
+        if a == Action::Settings {
+            self.settings.open = !self.settings.open;
+            return;
+        }
+        if self.settings.open && self.settings_key(a) {
             return;
         }
         let b = &mut self.browser;
@@ -275,6 +284,43 @@ impl App {
             Action::BrowseBack if b.pop() => {
                 self.nav.pop();
             }
+            _ => {}
+        }
+    }
+
+    /// The browser's keys, on the settings screen. False for keys it doesn't use.
+    fn settings_key(&mut self, a: Action) -> bool {
+        let s = &mut self.settings;
+        match a {
+            Action::BrowseUp => s.move_by(-1),
+            Action::BrowseDown => s.move_by(1),
+            Action::BrowseEnter => s.sideways(1),
+            Action::BrowseBack => s.sideways(-1),
+            Action::BrowseLoad => {
+                if let Some(key) = s.enter() {
+                    self.setting_action(key);
+                }
+            }
+            // Tab / Escape: back to the pages, then close.
+            Action::Browse => {
+                if !s.back() {
+                    s.open = false;
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// A settings row's button.
+    fn setting_action(&mut self, key: settings::Key) {
+        match key {
+            settings::Key::Rescan => {
+                self.browser.scanning = true;
+                scan_in_background(self.scan_tx.clone());
+                "Reading the library…".clone_into(&mut self.status);
+            }
+            settings::Key::Learn => "To map a controller, run: deck --midi-learn FILE".clone_into(&mut self.status),
             _ => {}
         }
     }
@@ -437,6 +483,7 @@ fn run() -> Result<()> {
         shared_focus: Arc::new(AtomicUsize::new(0)),
         hud: Hud::new(args.hud),
         browser: Browser::new(args.track.is_none() && !args.synth),
+        settings: Settings::new(settings::pages(&settings::Prefs::default(), &settings::SystemInfo::default())),
         libs: Vec::new(),
         nav: Vec::new(),
         scanned: Vec::new(),
@@ -684,7 +731,7 @@ impl Input {
     }
 
     fn key_down(&mut self, app: &mut App, k: Keycode, keymod: Mod, repeat: bool) {
-        let layer = if app.browser.open { Layer::Browser } else { Layer::Deck };
+        let layer = if app.browser.open || app.settings.open { Layer::Browser } else { Layer::Deck };
         let name = k.name();
         let Some(a) = self.keymap.get_in(&name, layer) else { return };
         let shift = keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD);
@@ -777,9 +824,13 @@ fn draw_decks(app: &mut App, snaps: &[Snapshot], size: (u32, u32), hud_text: &st
         } else {
             ""
         };
-        let browser = if focused { Some(&mut app.browser) } else { None };
+        let overlay = match (focused, app.settings.open) {
+            (false, _) => deck_ui::Overlay::None,
+            (true, true) => deck_ui::Overlay::Settings(&mut app.settings),
+            (true, false) => deck_ui::Overlay::Browser(&mut app.browser),
+        };
         let hud = if i == 0 { hud_text } else { "" };
-        cpu += app.slots[i].ui.build(&snaps[i], other, browser, status, hud);
+        cpu += app.slots[i].ui.build(&snaps[i], other, overlay, status, hud);
         app.slots[i].ui.draw_slot(size, i, n);
     }
     cpu

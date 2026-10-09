@@ -72,6 +72,8 @@ pub enum Action {
     ToggleHud,
     /// Move the keyboard to the other deck (two-deck harness).
     SwitchDeck,
+    /// Open or close the settings screen.
+    Settings,
 
     // Browser; also handled outside the engine.
     Browse,
@@ -129,6 +131,7 @@ impl Action {
                 | Self::ZoomOut
                 | Self::ToggleHud
                 | Self::SwitchDeck
+                | Self::Settings
                 | Self::Browse
                 | Self::BrowseUp
                 | Self::BrowseDown
