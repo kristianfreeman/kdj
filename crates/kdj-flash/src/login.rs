@@ -108,7 +108,9 @@ impl Setup {
     /// If the files can't be written.
     pub fn write(&self, boot: &Path) -> Result<()> {
         let id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let meta = format!("{MARK}.\ndsmode: local\ninstance_id: kdj-{id}\n");
+        // `instance-id`: cloud-init ignores Raspberry Pi's `instance_id`, and
+        // only a changed id makes it apply user-data on a card that's booted.
+        let meta = format!("{MARK}.\ndsmode: local\ninstance-id: kdj-{id}\n");
         std::fs::write(boot.join("user-data"), self.user_data()).context("writing user-data")?;
         std::fs::write(boot.join("meta-data"), meta).context("writing meta-data")?;
         // Raspberry Pi OS's sshswitch turns SSH on when this exists, then removes it.
@@ -186,11 +188,17 @@ pub fn found(boot: &Path) -> Found {
     }
 }
 
-/// The name a card's user-data gives its Pi, if any.
+/// A card's Pi's name: the one its user-data gives it, else the one it
+/// gave itself on a boot (kdj-name leaves it in kdj-name.txt).
 #[must_use]
 pub fn hostname(boot: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(boot.join("user-data")).ok()?;
-    text.lines().find_map(|l| l.strip_prefix("hostname:")).map(|h| h.trim().to_owned()).filter(|h| !h.is_empty())
+    let given = std::fs::read_to_string(boot.join("user-data")).ok().and_then(|t| {
+        t.lines().find_map(|l| l.strip_prefix("hostname:")).map(|h| h.trim().to_owned()).filter(|h| !h.is_empty())
+    });
+    given.or_else(|| {
+        let own = std::fs::read_to_string(boot.join("kdj-name.txt")).ok()?;
+        Some(own.trim().to_owned()).filter(|h| !h.is_empty())
+    })
 }
 
 #[cfg(test)]
@@ -227,7 +235,9 @@ mod tests {
     fn written_files_are_recognised() {
         let dir = std::env::temp_dir().join(format!("kdj-flash-login-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("dir");
-        assert_eq!(found(&dir), Found::None);
+        assert_eq!((found(&dir), hostname(&dir)), (Found::None, None));
+        std::fs::write(dir.join("kdj-name.txt"), "kdj-oak-pike\n").expect("write");
+        assert_eq!(hostname(&dir).as_deref(), Some("kdj-oak-pike"), "the name the Pi gave itself");
         Setup::new("kdj-amber-heron", None).expect("valid").write(&dir).expect("write");
         assert_eq!((found(&dir), hostname(&dir).as_deref()), (Found::None, Some("kdj-amber-heron")));
         assert!(!dir.join("ssh").exists(), "no login, no SSH");
@@ -236,7 +246,7 @@ mod tests {
         assert_eq!(found(&dir), Found::KdjFlash("kristian".into()));
         assert!(dir.join("ssh").is_file());
         let meta = std::fs::read_to_string(dir.join("meta-data")).expect("meta");
-        assert!(meta.contains("dsmode: local") && meta.contains("instance_id: kdj-"));
+        assert!(meta.contains("dsmode: local") && meta.contains("instance-id: kdj-"));
         std::fs::remove_dir_all(&dir).expect("clean up");
     }
 }

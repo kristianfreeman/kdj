@@ -37,4 +37,7 @@ hosts=$(grep -v '^127\.0\.1\.1' /etc/hosts || true)
 printf '%s\n127.0.1.1\t%s\n' "$hosts" "$name" >/etc/hosts
 # Announce the new name on the network (NAME.local).
 systemctl try-restart avahi-daemon.service || true
+# On the boot partition too, where kdj-flash reads it, so re-writing the
+# card's login keeps this name.
+echo "$name" >/boot/firmware/kdj-name.txt 2>/dev/null || true
 echo "kdj-name: this Pi is $name"
