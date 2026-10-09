@@ -52,7 +52,7 @@ pub fn write(image: &Image, target: &Path) -> Result<(u64, String)> {
         bar.set_position(total);
     }
     bar.set_message("finishing");
-    out.sync_all().context("flushing to the card")?;
+    flush(&out, target)?;
     bar.finish_and_clear();
     drop_cache(&out);
     Ok((total, hex(&hash.finalize())))
@@ -87,6 +87,26 @@ pub fn verify(target: &Path, len: u64, want: &str) -> Result<()> {
         bail!("what's on the card doesn't match the image (the card may be failing): {got} ≠ {want}");
     }
     Ok(())
+}
+
+/// Make sure everything written is on the card. For a file, a full sync.
+/// A raw disk device is unbuffered on macOS, and refuses the full-flush
+/// request std's `sync_all` makes there (`F_FULLFSYNC`: "Inappropriate ioctl
+/// for device"), so a device gets a plain fsync, and that refusal is fine.
+fn flush(out: &File, target: &Path) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    if !is_device(target) {
+        return out.sync_all().context("flushing to the file");
+    }
+    // SAFETY: `out` is an open file descriptor for the duration of the call.
+    if unsafe { libc::fsync(out.as_raw_fd()) } == 0 {
+        return Ok(());
+    }
+    let err = std::io::Error::last_os_error();
+    match err.raw_os_error() {
+        Some(libc::ENOTTY | libc::EINVAL | libc::ENOTSUP) => Ok(()),
+        _ => Err(err).context("flushing to the card"),
+    }
 }
 
 /// Read until `buf` is full or the input ends.
