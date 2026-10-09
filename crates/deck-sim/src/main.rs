@@ -4,7 +4,7 @@
 //!   deck-sim perf [--track FILE]
 //!   deck-sim analyze FILE...
 //!   deck-sim synth OUT.wav [--bpm N] [--bars N] [--rate HZ]
-//!   deck-sim frame OUT.png [--at SECS] [--loop BEATS] [--scale N]
+//!   deck-sim frame OUT.png [--at SECS] [--loop BEATS] [--scale N] [--decks 2] [--link BPM]
 //!   deck-sim rekordbox list|bench [--count N]   (local Rekordbox collection)
 //!   deck-sim browser OUT.png [--open A/B] [--cursor N]   (browser: your library + a fake USB)
 
@@ -248,6 +248,13 @@ fn frame(opts: &Opts) -> Result<bool> {
         }
         sim.send(Action::PlayPause, Edge::Press);
         sims.push(sim);
+    }
+    if let Some(bpm) = opts.flag("link") {
+        // One deck on a Link session with a peer, a little behind its beat.
+        let mut session = deck_engine::session::LocalSession::new(bpm.parse()?, SAMPLE_RATE);
+        deck_engine::session::Session::force_beat(&mut session, 0.08);
+        sims.truncate(1);
+        sims[0].join(session, Some(1));
     }
     if let Some(beats) = opts.flag("loop") {
         let a = match beats {

@@ -287,3 +287,20 @@ fn taking_master_hands_the_old_master_back_to_sync() -> Result<()> {
     assert!((synced - 130.0).abs() < 1e-6, "A follows at {synced:.2}");
     Ok(())
 }
+
+#[test]
+fn a_deck_reports_its_phase_against_the_session() -> Result<()> {
+    // Not synced, a quarter beat ahead of the session.
+    let mut deck = Deck::new(128.0)?;
+    let mut link = session(128.0, -0.25);
+    let s = run(&mut deck, &mut link, 1.0);
+    let p = s.link_phase.unwrap_or(f64::NAN);
+    assert!((p - 0.25).abs() < 0.01, "phase {p:.3}");
+    // Synced, it reads zero.
+    deck.press(Action::Sync, Some(&mut link));
+    link.tick();
+    let s = run(&mut deck, &mut link, 2.0);
+    let p = s.link_phase.unwrap_or(f64::NAN);
+    assert!(p.abs() < 0.002, "synced phase {p:.4}");
+    Ok(())
+}

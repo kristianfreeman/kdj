@@ -128,9 +128,7 @@ impl Scene {
         };
         self.header(atlas, s, t, view);
         self.detail(atlas, s, t, view);
-        if let Some(o) = other {
-            self.phase_meter(atlas, s, o);
-        }
+        self.phase_meter(atlas, s, other);
         self.overview(s, t);
         self.transport(atlas, s);
         self.readouts(atlas, s);
@@ -206,10 +204,20 @@ impl Scene {
         playhead(f);
     }
 
-    /// Where the other deck's beat falls relative to ours, across ±half a
-    /// beat, centred on the playhead. A marker right of centre means we're
-    /// ahead. Both decks have to be playing for it to mean anything.
-    fn phase_meter(&mut self, atlas: &Atlas, s: &Snapshot, other: &Snapshot) {
+    /// Where the other deck's beat falls relative to ours (or, with one
+    /// deck, the Link session's), across ±half a beat, centred on the
+    /// playhead. A marker right of centre means we're ahead. Both have to
+    /// be playing for it to mean anything.
+    fn phase_meter(&mut self, atlas: &Atlas, s: &Snapshot, other: Option<&Snapshot>) {
+        let reading = match (other, s.link_bpm) {
+            (Some(o), _) => Some(deck_phase(s, o).ok_or("other deck stopped")),
+            // Alone on Link, only when there's someone to follow.
+            (None, Some(bpm)) if s.link_peers.is_some_and(|n| n > 0) => {
+                Some(s.link_phase.map(|p| (p, p * 60.0 / bpm * 1000.0, s.bpm() - bpm, " vs Link")).ok_or("Link"))
+            }
+            _ => None,
+        };
+        let Some(reading) = reading else { return };
         let f = &mut self.frame;
         let text = &mut self.text;
         let (cx, y, half) = (PLAYHEAD_X, DETAIL[1] + 6.0, 120.0);
@@ -219,23 +227,20 @@ impl Scene {
             f.rect((q * 2.0).mul_add(half, cx) - 0.5, y, 1.0, 10.0, FAINT);
         }
         f.rect(cx - 1.0, y - 2.0, 2.0, 14.0, DIM);
-        let live = s.playing && other.playing && s.track_frames > 0 && other.track_frames > 0;
         let label_x = cx + half + 10.0;
-        if !live {
-            let msg = "other deck stopped";
-            f.rect(label_x - 4.0, y - 3.0, atlas.width_of(Style::Label, msg) + 8.0, 16.0, alpha(BG, 210));
-            atlas.draw(f, Style::Label, label_x, y + 10.0, Align::Left, msg, DIM);
-            return;
-        }
-        // Bring the other deck's position to our audio clock before comparing.
-        let other_pos = (count_f64(s.clock) - count_f64(other.clock)).mul_add(other.rate, other.pos);
-        let phase = (s.grid.beat_at(s.pos) - other.grid.beat_at(other_pos) + 0.5).rem_euclid(1.0) - 0.5;
-        let ms = phase * 60.0 / s.bpm() * 1000.0;
+        let (phase, ms, dbpm, against) = match reading {
+            Ok(r) => r,
+            Err(msg) => {
+                f.rect(label_x - 4.0, y - 3.0, atlas.width_of(Style::Label, msg) + 8.0, 16.0, alpha(BG, 210));
+                atlas.draw(f, Style::Label, label_x, y + 10.0, Align::Left, msg, DIM);
+                return;
+            }
+        };
         let mx = (narrow(phase) * 2.0).mul_add(half, cx);
         f.rect(mx - 4.0, y - 3.0, 8.0, 16.0, BG);
         f.rect(mx - 3.0, y - 2.0, 6.0, 14.0, FG);
         text.clear();
-        let _ = write!(text, "{ms:+.1} ms  ·  {:+.2} BPM", s.bpm() - other.bpm());
+        let _ = write!(text, "{ms:+.1} ms{against}  ·  {dbpm:+.2} BPM");
         let w = atlas.width_of(Style::Label, text);
         f.rect(label_x - 4.0, y - 3.0, w + 8.0, 16.0, alpha(BG, 210));
         atlas.draw(f, Style::Label, label_x, y + 10.0, Align::Left, text, FG);
@@ -395,6 +400,18 @@ impl Scene {
             atlas.draw(f, Style::Body, lx + 56.0, y + 22.0, Align::Center, "LOOP", DIM);
         }
     }
+}
+
+/// Our phase against another deck's, in beats within ±½, with the gap in ms
+/// and BPM; None unless both are playing.
+fn deck_phase(s: &Snapshot, other: &Snapshot) -> Option<(f64, f64, f64, &'static str)> {
+    if !(s.playing && other.playing && s.track_frames > 0 && other.track_frames > 0) {
+        return None;
+    }
+    // Bring the other deck's position to our audio clock before comparing.
+    let other_pos = (count_f64(s.clock) - count_f64(other.clock)).mul_add(other.rate, other.pos);
+    let phase = (s.grid.beat_at(s.pos) - other.grid.beat_at(other_pos) + 0.5).rem_euclid(1.0) - 0.5;
+    Some((phase, phase * 60.0 / s.bpm() * 1000.0, s.bpm() - other.bpm(), ""))
 }
 
 /// The status line, bottom right under the loop buttons; cut short rather

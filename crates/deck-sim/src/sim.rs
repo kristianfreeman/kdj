@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
+use deck_engine::session::{self, LocalSession};
 use deck_engine::{Action, Edge, Engine, EngineConfig, EngineHandle, Snapshot, Track};
 use hdrhistogram::Histogram;
 
@@ -22,6 +23,8 @@ pub struct Sim {
     /// Callback wall time, ns: includes the OS scheduling something else.
     pub wall: Histogram<u64>,
     frames: u64,
+    /// A shared timeline standing in for Ableton Link, and its peer count.
+    session: Option<(LocalSession, Option<u32>)>,
 }
 
 impl Sim {
@@ -44,6 +47,7 @@ impl Sim {
             timings: Histogram::new_with_bounds(100, 1_000_000_000, 3)?,
             wall: Histogram::new_with_bounds(100, 1_000_000_000, 3)?,
             frames: 0,
+            session: None,
         };
         sim.step(); // apply the load
         sim.timings.reset();
@@ -76,10 +80,24 @@ impl Sim {
         (secs * f64::from(self.sample_rate())).ceil() as u64
     }
 
+    /// Follow (or lead) `session` from now on, as if `peers` were on Link.
+    pub const fn join(&mut self, session: LocalSession, peers: Option<u32>) {
+        self.session = Some((session, peers));
+    }
+
     pub fn step(&mut self) {
         let (engine, out) = (&mut self.engine, &mut self.out);
         let (t, cpu) = (Instant::now(), thread_cpu_ns());
-        crate::alloc_guard::forbid(|| engine.process(out));
+        let session = &mut self.session;
+        crate::alloc_guard::forbid(|| {
+            if let Some((s, peers)) = session {
+                session::drive(std::slice::from_mut(engine), s, *peers);
+            }
+            engine.process(out);
+        });
+        if let Some((s, _)) = &mut self.session {
+            s.advance(self.block as u64);
+        }
         let wall = u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX);
         let cpu = thread_cpu_ns() - cpu;
         self.timings.saturating_record(cpu.max(100));

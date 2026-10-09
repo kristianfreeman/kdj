@@ -86,6 +86,8 @@ struct LinkState {
     /// Bars have been lined up since SYNC went on or play started; from
     /// then on only the beat phase is held.
     locked: bool,
+    /// Our beat against the timeline's at the start of this block.
+    phase: Option<f64>,
 }
 
 /// What a deck on MASTER tells the timeline.
@@ -148,6 +150,9 @@ pub struct Snapshot {
     pub link_bpm: Option<f64>,
     /// Ableton Link peers; None without Link (a local session, or none).
     pub link_peers: Option<u32>,
+    /// Where our beat falls against the shared timeline's, in its beats
+    /// within ±½, while playing on one.
+    pub link_phase: Option<f64>,
 }
 
 impl Snapshot {
@@ -491,6 +496,11 @@ impl Engine {
     /// (one jump if far out, gentle bends after that), then hold the beat.
     fn follow_timeline(&mut self) {
         self.link.rate = None;
+        self.link.phase = self
+            .link
+            .timeline
+            .filter(|_| self.playing && self.track.is_some())
+            .map(|tl| sync::beat_phase(self.grid.beat_at(self.here()), self.grid.bpm, &tl));
         let following = self.link.mode == SyncMode::Follow && self.playing && self.track.is_some();
         let Some(tl) = self.link.timeline.filter(|_| following) else {
             self.link.error = 0.0;
@@ -975,6 +985,7 @@ impl Engine {
             sync_error: self.link.error,
             link_bpm: self.link.timeline.map(|t| t.bpm),
             link_peers: self.link.timeline.and_then(|t| t.peers),
+            link_phase: self.link.phase,
         }
     }
 }
@@ -1007,6 +1018,7 @@ impl Snapshot {
             sync_error: 0.0,
             link_bpm: None,
             link_peers: None,
+            link_phase: None,
         }
     }
 }

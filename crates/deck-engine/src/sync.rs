@@ -82,6 +82,14 @@ pub fn follow(deck_beat: f64, deck_bpm: f64, tl: &Timeline, quantum: f64) -> Fol
     Follow { rate: base_rate * (1.0 + trim), base_rate, snap_beats: None, error }
 }
 
+/// Where a deck's beat falls against the timeline's, in timeline beats
+/// within ±½ (positive: the deck is ahead), counting a half- or
+/// double-tempo grid as matching.
+#[must_use]
+pub fn beat_phase(deck_beat: f64, deck_bpm: f64, tl: &Timeline) -> f64 {
+    wrap(deck_beat.mul_add(fold(tl.bpm / deck_bpm), -tl.beat), 1.0)
+}
+
 /// The power of two (¼ to 4) that brings a tempo ratio closest to 1.
 fn fold(ratio: f64) -> f64 {
     let mut f = 1.0;
