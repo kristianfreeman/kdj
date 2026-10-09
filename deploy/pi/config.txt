@@ -1,4 +1,4 @@
-# --- deck: added by deploy/pi/install.sh (everything between these markers) ---
+# --- kdj: added by deploy/pi/install.sh (everything between these markers) ---
 [all]
 # Full KMS graphics (the deck draws with GLES 3 straight to the display),
 # without HDMI audio; and no onboard audio: the DAC hat is the only output.
@@ -25,4 +25,4 @@ disable_splash=1
 boot_delay=0
 # Optional realtime kernel, from build-rt-kernel.sh:
 #kernel=kernel8-rt.img
-# --- deck: end ---
+# --- kdj: end ---

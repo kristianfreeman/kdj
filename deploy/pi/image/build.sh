@@ -9,9 +9,9 @@
 #
 # Needs Docker with linux/arm64 containers (native on Apple Silicon; under
 # emulation elsewhere, much slower) and runs one privileged container for the
-# loop mounts. Writes target/image/deck-rpi4-<date>.img.xz and its .sha256.
+# loop mounts. Writes target/image/kdjos-rpi4-<date>.img.xz and its .sha256.
 # Downloads are cached in target/image/cache; the cargo cache lives in the
-# Docker volume deck-image-cargo.
+# Docker volume kdj-image-cargo.
 #
 # To build on a particular release instead of the latest, give its URL:
 #   RASPIOS_URL=https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz
@@ -21,8 +21,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../.." && pwd)
 out=$repo/target/image
 cache=$out/cache
-name=deck-rpi4-$(date +%Y-%m-%d)
-containers=(deck-image-prepare deck-image-binary deck-image-build)
+name=kdjos-rpi4-$(date +%Y-%m-%d)
+containers=(kdj-image-prepare kdj-image-binary kdj-image-build)
 say() { printf '\n== %s\n' "$*"; }
 
 cleanup() {
@@ -64,7 +64,7 @@ fi
 }
 
 say "Which Debian release it is"
-codename=$(run deck-image-prepare --privileged \
+codename=$(run kdj-image-prepare --privileged \
     -v "$repo:/src:ro" -v "$out:/out" -v "$cache:/cache:ro" \
     debian:trixie /src/deploy/pi/image/customize.sh prepare "/cache/$xz" | tail -n1)
 case $codename in
@@ -73,17 +73,17 @@ esac
 echo "Debian $codename"
 
 say "Building the deck on Debian $codename (arm64)"
-docker volume create deck-image-cargo >/dev/null
-run deck-image-binary \
-    -v "$repo:/src:ro" -v deck-image-cargo:/cache -v "$out/build:/out" \
+docker volume create kdj-image-cargo >/dev/null
+run kdj-image-binary \
+    -v "$repo:/src:ro" -v kdj-image-cargo:/cache -v "$out/build:/out" \
     --tmpfs /work:exec,size=2g \
     "debian:$codename" /src/deploy/pi/image/build-binary.sh
 
 say "Installing into the image"
-version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/crates/deck/Cargo.toml" | head -n1)
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/crates/kdj/Cargo.toml" | head -n1)
 commit=$(git -C "$repo" describe --always --dirty 2>/dev/null || echo unknown)
-run deck-image-build --privileged --cgroupns=host \
-    -e "DECK_VERSION=$version" -e "DECK_COMMIT=$commit" -e "DECK_BASE=${xz%.img.xz}" \
+run kdj-image-build --privileged --cgroupns=host \
+    -e "KDJ_VERSION=$version" -e "KDJ_COMMIT=$commit" -e "KDJ_BASE=${xz%.img.xz}" \
     -v "$repo:/src:ro" -v "$out:/out" \
     "debian:$codename" /src/deploy/pi/image/customize.sh build "$name"
 

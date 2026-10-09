@@ -1,4 +1,4 @@
-# deck
+# kdj
 
 One DJ deck for a Raspberry Pi 4 feeding a Xone:96 channel: transport, CDJ-style
 cue, tempo with key lock, beat-quantized loops, Pioneer 3-band waveforms.
@@ -6,7 +6,7 @@ cue, tempo with key lock, beat-quantized loops, Pioneer 3-band waveforms.
 ## Play a track
 
 ```bash
-cargo run --release -p deck
+cargo run --release -p kdj
 ```
 
 It opens in the browser: your Rekordbox collection and any Rekordbox USB
@@ -94,8 +94,8 @@ control in turn (play, cue, jog encoder, tempo encoder, loops, hot cues,
 browser…) and writes a mapping file:
 
 ```bash
-cargo run --release -p deck -- --midi-learn k3.toml
-cargo run --release -p deck -- --midi k3.toml
+cargo run --release -p kdj -- --midi-learn k3.toml
+cargo run --release -p kdj -- --midi k3.toml
 ```
 
 The mapping's `port` is part of the controller's input name (ALSA's
@@ -133,20 +133,20 @@ service's limits allow; the log says whether it did.
 
 ## Simulate
 
-Everything except the window and the sound card runs headless in `deck-sim`:
+Everything except the window and the sound card runs headless in `kdj-sim`:
 
 ```bash
-cargo run --release -p deck-sim -- scenarios                 # scripted sessions in scenarios/
-cargo run --release -p deck-sim -- perf                      # perf budgets (perf-budgets.toml)
-cargo run --release -p deck-sim -- analyze ~/Music/*.mp3     # detected BPM and bar 1 for real files
-cargo run --release -p deck-sim -- frame out.png --loop 4    # render the screen to PNG
-cargo run --release -p deck-sim -- frame out.png --decks 2   # two decks with the phase meter
-cargo run --release -p deck-sim -- browser out.png --open "Collection"   # the browser
-cargo run --release -p deck-sim -- rekordbox bench           # our detector vs your Rekordbox grids
-cargo run --release -p deck-sim -- frame out.png --link 135  # alone on Link: phase against the session
-cargo run --release -p deck-sim -- frame out.png --fader -5  # a tempo fader that hasn't caught up
-cargo run --release -p deck-sim -- ab track.mp3 --tempo 6    # key lock listening test (target/ab)
-cargo run --release -p deck-sim -- story                     # every screen state on one page (target/storybook)
+cargo run --release -p kdj-sim -- scenarios                 # scripted sessions in scenarios/
+cargo run --release -p kdj-sim -- perf                      # perf budgets (perf-budgets.toml)
+cargo run --release -p kdj-sim -- analyze ~/Music/*.mp3     # detected BPM and bar 1 for real files
+cargo run --release -p kdj-sim -- frame out.png --loop 4    # render the screen to PNG
+cargo run --release -p kdj-sim -- frame out.png --decks 2   # two decks with the phase meter
+cargo run --release -p kdj-sim -- browser out.png --open "Collection"   # the browser
+cargo run --release -p kdj-sim -- rekordbox bench           # our detector vs your Rekordbox grids
+cargo run --release -p kdj-sim -- frame out.png --link 135  # alone on Link: phase against the session
+cargo run --release -p kdj-sim -- frame out.png --fader -5  # a tempo fader that hasn't caught up
+cargo run --release -p kdj-sim -- ab track.mp3 --tempo 6    # key lock listening test (target/ab)
+cargo run --release -p kdj-sim -- story                     # every screen state on one page (target/storybook)
 ```
 
 `ab` renders the same 30 s of a track as it is, sped up without key lock,
@@ -171,12 +171,12 @@ Docker, with the packages the Pi setup installs. The toolchain is pinned in
 
 ## Layout
 
-- `crates/deck-engine`: transport, loops, hot cues, nudging, key lock, fallback analysis. No I/O, no UI.
-- `crates/deck-library`: Rekordbox data: analysis files (grids, cues, waveforms) and `export.pdb`.
-- `crates/deck-ui`: the 800×480 screen in OpenGL (3.3 core / ES 3.0).
-- `crates/deck`: the app: SDL2 window, cpal audio, keyboard, touch, MIDI, Ableton Link.
-- `crates/deck-sim`: virtual audio clock, scenarios, perf budgets, PNG frames.
-- `crates/deck-flash`: SD cards: what's on them, and writing the deck's image to one.
+- `crates/kdj-engine`: transport, loops, hot cues, nudging, key lock, fallback analysis. No I/O, no UI.
+- `crates/kdj-library`: Rekordbox data: analysis files (grids, cues, waveforms) and `export.pdb`.
+- `crates/kdj-ui`: the 800×480 screen in OpenGL (3.3 core / ES 3.0).
+- `crates/kdj`: the app: SDL2 window, cpal audio, keyboard, touch, MIDI, Ableton Link.
+- `crates/kdj-sim`: virtual audio clock, scenarios, perf budgets, PNG frames.
+- `crates/kdj-flash`: SD cards: what's on them, and writing the deck's image to one.
 - `deploy/pi`: Raspberry Pi setup: build, boot-to-deck service, USB mounting, boot config.
 
 ## Licence
@@ -184,4 +184,4 @@ Docker, with the packages the Pi setup installs. The toolchain is pinned in
 GPL-3.0-or-later (see `LICENSE`), so the deck can sync with Ableton Link,
 which is GPL-2.0-or-later. Geist (in `assets/fonts`) is under the SIL Open
 Font License 1.1 (`assets/fonts/OFL.txt`). The test fixtures in
-`crates/deck-library/tests/fixtures` come from rekordcrate (MPL-2.0).
+`crates/kdj-library/tests/fixtures` come from rekordcrate (MPL-2.0).

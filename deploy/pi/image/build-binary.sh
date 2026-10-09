@@ -28,6 +28,6 @@ export PATH=$CARGO_HOME/bin:$PATH
 tar -C /src --exclude=./target --exclude=./.git -cf - . | tar -C /work -xf -
 cd /work
 rustc --version   # installs the toolchain pinned in rust-toolchain.toml
-cargo build --release --locked -p deck
-install -m 755 "$CARGO_TARGET_DIR/release/deck" /out/deck
-echo "built the deck for $codename: $(du -h /out/deck | cut -f1)"
+cargo build --release --locked -p kdj
+install -m 755 "$CARGO_TARGET_DIR/release/kdj" /out/kdj
+echo "built the deck for $codename: $(du -h /out/kdj | cut -f1)"

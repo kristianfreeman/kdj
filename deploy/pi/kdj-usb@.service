@@ -1,0 +1,12 @@
+# Mount a USB stick read-only for the deck's browser, while it's plugged in.
+# Started by 99-kdj-usb.rules; stops (and unmounts) when the stick goes.
+[Unit]
+Description=kdj: USB stick %I
+BindsTo=dev-%i.device
+After=dev-%i.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/kdj/bin/kdj-usb mount %I
+ExecStop=/opt/kdj/bin/kdj-usb unmount %I

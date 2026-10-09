@@ -1,7 +1,7 @@
 # Example MIDI mapping. Generate one for your controller with:
-#   deck --midi-learn my-controller.toml
+#   kdj --midi-learn my-controller.toml
 # then run with:
-#   deck --midi my-controller.toml
+#   kdj --midi my-controller.toml
 #
 # Notes are buttons (press / release); `cc` with `action` is a button too
 # (64 and up = pressed). `cc` with `up` / `down` is an endless encoder:

@@ -1,0 +1,16 @@
+[package]
+name = "kdj-ui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+kdj-engine = { version = "0.1.0", path = "../kdj-engine" }
+kdj-library = { version = "0.1.0", path = "../kdj-library" }
+fontdue = "0.9.4"
+glow = "0.18.0"
+
+[lints]
+workspace = true

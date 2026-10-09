@@ -1,4 +1,4 @@
-# The deck on a Raspberry Pi 4
+# kdj on a Raspberry Pi 4
 
 From a blank SD card to a Pi that boots straight into the deck: full
 screen, touchscreen, DAC hat, Rekordbox USB sticks, Ableton Link on
@@ -9,13 +9,13 @@ Ethernet.
 | | |
 |---|---|
 | `setup.sh` | Installs the build tools, builds the deck on the Pi, and runs `install.sh`. Safe to run again after a `git pull`. |
-| `install.sh` | Installs a built deck to `/opt/deck` and sets up everything below (shared by `setup.sh` and the image build), including a systemd preset so that a fresh image's first boot doesn't turn the background services it disables back on. |
+| `install.sh` | Installs a built deck to `/opt/kdj` and sets up everything below (shared by `setup.sh` and the image build), including a systemd preset so that a fresh image's first boot doesn't turn the background services it disables back on. |
 | `image/build.sh` | Builds a ready-to-flash SD card image with all of this done (see below). |
-| `deck.service` | Starts the deck at boot on the display (KMS/DRM, no desktop), as the `deck` user, without waiting for the network, and restarts it whenever it exits, forever. Lets the audio thread run at realtime priority and lock its memory, and runs the CPU at full speed. |
-| `deck.env` → `/etc/deck/deck.env` | The deck's options: audio output, buffer size, MIDI mapping. |
-| `99-deck-usb.rules`, `deck-usb@.service`, `deck-usb` | Mounts USB sticks read-only at `/media/deck/<name>` while they're plugged in, where the browser finds Rekordbox exports. Read-only: the deck never writes to a stick, so pulling one mid-set can't corrupt it. |
+| `kdj.service` | Starts the deck at boot on the display (KMS/DRM, no desktop), as the `deck` user, without waiting for the network, and restarts it whenever it exits, forever. Lets the audio thread run at realtime priority and lock its memory, and runs the CPU at full speed. |
+| `kdj.env` → `/etc/kdj/kdj.env` | The deck's options: audio output, buffer size, MIDI mapping. |
+| `99-kdj-usb.rules`, `kdj-usb@.service`, `kdj-usb` | Mounts USB sticks read-only at `/media/kdj/<name>` while they're plugged in, where the browser finds Rekordbox exports. Read-only: the deck never writes to a stick, so pulling one mid-set can't corrupt it. |
 | `config.txt` | Added to `/boot/firmware/config.txt`: KMS graphics, the DAC hat's overlay, onboard and HDMI audio off, Bluetooth off, no splash. |
-| `/etc/sudoers.d/deck` | Lets the deck power off and restart the Pi (`systemctl poweroff` / `reboot`, nothing else). |
+| `/etc/sudoers.d/kdj` | Lets the deck power off and restart the Pi (`systemctl poweroff` / `reboot`, nothing else). |
 | `build-rt-kernel.sh` | Optional: builds and installs a PREEMPT_RT kernel. |
 
 ## What it's like to use
@@ -23,7 +23,7 @@ Ethernet.
 Power on: a black screen, then the deck. Boot messages go to tty3, out of
 sight; there's no login prompt on the screen and no splash. If the deck
 ever exits, it's back a second later. Power off or restart from the deck's
-Settings → System. For a console, SSH in, or `sudo systemctl stop deck` and
+Settings → System. For a console, SSH in, or `sudo systemctl stop kdj` and
 switch to another VT with a keyboard (Ctrl+Alt+F2).
 
 In the background nothing competes with it mid-set: the apt, man-db,
@@ -43,64 +43,70 @@ It downloads the latest Raspberry Pi OS Lite (64-bit) (cached in
 `target/image/cache`, checked against Raspberry Pi's published SHA-256),
 builds the deck in a Debian container of the same release, installs it in
 the image with `install.sh`, and writes
-`target/image/deck-rpi4-<date>.img.xz` and its `.sha256`, after checking
+`target/image/kdjos-rpi4-<date>.img.xz` and its `.sha256`, after checking
 the result, including booting it in a container. About 2 minutes on an
 Apple Silicon Mac once the caches are warm. `RASPIOS_URL=…` pins a
 particular release.
 
-Flash it with `deck-flash` (below), or with Raspberry Pi Imager to set up a
+Flash it with `kdj-flash` (below), or with Raspberry Pi Imager to set up a
 login as you go: **Raspberry Pi 4**, **Use custom** → the
 `.img.xz`, then edit the OS customisation: a user and password, SSH (a key
-or password), Wi-Fi if you use it. The hostname is `deck` unless you set
-another there. The image has no user, password or keys of its own, and
+or password), Wi-Fi if you use it, and a hostname if you want one (left
+alone, the Pi names itself, below). The image has no user, password or keys of its own, and
 never asks for one on screen: Raspberry Pi OS's "create a user" dialog is
 off, so no keyboard is ever needed. The deck runs as its own user either
 way; a login is only for SSH. First boot grows the filesystem to fill the
 card and applies the customisation (it may restart once), then the deck
 starts.
 
-### With deck-flash
+### With kdj-flash
 
-`deck-flash` shows what's on a card and writes the image, from this
+`kdj-flash` shows what's on a card and writes the image, from this
 repository on a Mac or Linux:
 
 ```bash
-cargo run --release -p deck-flash               # the image here, the cards plugged in
-cargo run --release -p deck-flash -- status     # one card: partitions, what's on it, which build
-cargo run --release -p deck-flash -- flash      # write the newest image, then read it back
-cargo run --release -p deck-flash -- format     # erase a card to one FAT32 volume
+cargo run --release -p kdj-flash               # the image here, the cards plugged in
+cargo run --release -p kdj-flash -- status     # one card: partitions, what's on it, which build
+cargo run --release -p kdj-flash -- flash      # write the newest image, then read it back
+cargo run --release -p kdj-flash -- format     # erase a card to one FAT32 volume
 ```
 
 (`make card` and `make flash` do the first and third; `cargo install --path
-crates/deck-flash` puts `deck-flash` in `~/.cargo/bin`.)
+crates/kdj-flash` puts `kdj-flash` in `~/.cargo/bin`.)
 
 It only touches removable disks, never the one the computer runs from or
 anything bigger than an SD card; shows what's on the card and makes you type
 its name before erasing it; checks the image's SHA-256 first, writes with a
 progress bar, reads the card back to prove it matches, and ejects it. It
 asks for your password (sudo) only for the write. It reads the card's
-`deck-image.txt` to tell you which build it holds and whether that's the
+`kdj-image.txt` to tell you which build it holds and whether that's the
 image you have here, and whether the card has booted on a Pi yet.
 
-It also sets up your login, with no keyboard and no password: your user
-name here and your SSH public key (`~/.ssh/id_ed25519.pub` or similar),
-SSH switched on, hostname `deck`. After first boot, `ssh you@deck.local`.
+It also names the Pi and sets up your login, with no keyboard and no
+password: a network name of its own (`kdj-amber-heron`: picked when you
+flash a new card, kept when you re-flash one of ours), your user name here
+and your SSH public key (`~/.ssh/id_ed25519.pub` or similar), SSH switched
+on. After first boot, `ssh you@kdj-amber-heron.local`; the name is also on
+the Pi's screen under Settings → System.
 It's written to the card's boot partition for Raspberry Pi OS's cloud-init
 to apply; `--user`, `--key`, `--hostname` change it, `--no-login` skips
-it, and `deck-flash login` adds or replaces it on a card that's already
+it, and `kdj-flash login` adds or replaces it on a card that's already
 flashed (applied at its next boot, booted before or not).
 
-Already set up in the image: the deck at `/opt/deck/bin/deck`, starting at
-boot, `/etc/deck/deck.env` with `--device hifiberry --buffer 128`, the
-example MIDI mapping in `/etc/deck/`, USB stick mounting, power off and
-restart for the deck user, the `config.txt` block and quiet `cmdline.txt`,
-and the hostname `deck`. Check, with the card in your computer (the
+Already set up in the image: the deck at `/opt/kdj/bin/kdj`, starting at
+boot, `/etc/kdj/kdj.env` with `--device hifiberry --buffer 128`, the
+example MIDI mapping in `/etc/kdj/`, USB stick mounting, power off and
+restart for the kdj user, the `config.txt` block and quiet `cmdline.txt`.
+Each Pi gets its own network name, `kdj-<word>-<word>.local`, so several
+can share a network: kdj-flash writes one to the card, and a Pi nobody
+named makes one from its serial number on first boot (`kdj-name`, words
+from `names.txt`). Check, with the card in your computer (the
 boot partition) or over SSH:
 
 - **DAC hat** and **display** in `config.txt`, as in step 3 below.
 - **HDMI mode**, if the screen needs one: add `video=HDMI-A-1:800x480@60`
   to the single line in `cmdline.txt`.
-- After booting: `journalctl -u deck` says which audio output it opened (or,
+- After booting: `journalctl -u kdj` says which audio output it opened (or,
   if the DAC isn't found, that it fell back to the default and which outputs
   there are) and whether it got realtime priority.
 
@@ -112,13 +118,13 @@ boot partition) or over SSH:
 
    ```bash
    sudo apt-get install -y git
-   git clone <this repository> deck && cd deck
+   git clone <this repository> kdj && cd kdj
    deploy/pi/setup.sh
    ```
 
-   For an HDMI screen, give its mode: `DECK_HDMI_MODE=800x480@60 deploy/pi/setup.sh`.
+   For an HDMI screen, give its mode: `KDJ_HDMI_MODE=800x480@60 deploy/pi/setup.sh`.
 3. Check two things in `/boot/firmware/config.txt`, in the block between
-   the `deck` markers:
+   the `kdj` markers:
    - **DAC hat**: `hifiberry-dacplus` suits most PCM5122 boards; some want
      `hifiberry-dacplus-std` or `iqaudio-dacplus`.
    - **Display**: nothing for HDMI; for a DSI panel, uncomment its overlay.
@@ -126,22 +132,22 @@ boot partition) or over SSH:
 
 ## Afterwards
 
-- **Logs**: `journalctl -u deck -f`. At start it says which audio output it
+- **Logs**: `journalctl -u kdj -f`. At start it says which audio output it
   opened and at what rate, and whether it got realtime priority and locked
   memory.
-- **Audio output**: set `--device` in `/etc/deck/deck.env` to part of the
+- **Audio output**: set `--device` in `/etc/kdj/kdj.env` to part of the
   output's name. If nothing matches, the deck plays on the default output
   and the log lists every output.
-- **Controller**: stop the deck (`sudo systemctl stop deck`), run
-  `/opt/deck/bin/deck --midi-learn /etc/deck/k3.toml` (as root, or after
-  `sudo chown deck /etc/deck`), then add `--midi /etc/deck/k3.toml` to
-  `deck.env` and `sudo systemctl start deck`.
-- **Update**: `git pull && deploy/pi/setup.sh --build-only && sudo systemctl restart deck`.
-  On a Pi flashed from the image, copy over a new `target/image/build/deck`
-  and `sudo install -m 755 deck /opt/deck/bin/deck && sudo systemctl restart deck`
+- **Controller**: stop the deck (`sudo systemctl stop kdj`), run
+  `/opt/kdj/bin/kdj --midi-learn /etc/kdj/k3.toml` (as root, or after
+  `sudo chown kdj /etc/kdj`), then add `--midi /etc/kdj/k3.toml` to
+  `kdj.env` and `sudo systemctl start kdj`.
+- **Update**: `git pull && deploy/pi/setup.sh --build-only && sudo systemctl restart kdj`.
+  On a Pi flashed from the image, copy over a new `target/image/build/kdj`
+  and `sudo install -m 755 kdj /opt/kdj/bin/kdj && sudo systemctl restart kdj`
   (or flash a new image).
-- **Undo the boot changes**: `install.sh` keeps `config.txt.deck-backup` and
-  `cmdline.txt.deck-backup` next to the originals.
+- **Undo the boot changes**: `install.sh` keeps `config.txt.kdj-backup` and
+  `cmdline.txt.kdj-backup` next to the originals.
 
 ## Realtime kernel (optional)
 

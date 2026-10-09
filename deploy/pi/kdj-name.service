@@ -1,0 +1,13 @@
+# A network name of its own (kdj-word-word) for a kdj nobody named.
+[Unit]
+Description=kdj: a network name of its own
+# After cloud-init, which applies a name kdj-flash or Imager wrote.
+After=local-fs.target cloud-init-local.service cloud-init-network.service cloud-init-main.service
+Before=kdj.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/kdj/bin/kdj-name
+
+[Install]
+WantedBy=multi-user.target

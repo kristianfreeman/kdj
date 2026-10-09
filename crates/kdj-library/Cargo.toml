@@ -1,0 +1,18 @@
+[package]
+name = "kdj-library"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+kdj-engine = { version = "0.1.0", path = "../kdj-engine" }
+unicode-normalization = "0.1.25"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+binrw = "0.14"
+rekordcrate = "0.3.0"

@@ -1,0 +1,3 @@
+# USB sticks (any partition with a filesystem): mount for the deck.
+ACTION=="add", SUBSYSTEMS=="usb", SUBSYSTEM=="block", ENV{ID_FS_USAGE}=="filesystem", \
+  TAG+="systemd", ENV{SYSTEMD_WANTS}+="kdj-usb@%k.service"

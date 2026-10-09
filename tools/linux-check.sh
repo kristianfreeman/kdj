@@ -6,9 +6,9 @@
 #   tools/linux-check.sh     (or: make linux)
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
-docker volume create deck-linux-cache >/dev/null
+docker volume create kdj-linux-cache >/dev/null
 exec docker run --rm --platform linux/arm64 \
-    -v "$repo:/src:ro" -v deck-linux-cache:/cache --tmpfs /work:exec,size=2g \
+    -v "$repo:/src:ro" -v kdj-linux-cache:/cache --tmpfs /work:exec,size=2g \
     debian:trixie bash -euo pipefail -c '
 export DEBIAN_FRONTEND=noninteractive CARGO_TARGET_DIR=/cache/target
 apt-get update -qq
@@ -21,6 +21,6 @@ cd /work
 rustc --version
 cargo clippy -q --locked --workspace --all-targets -- -D warnings
 cargo test -q --locked --workspace
-cargo build -q --release --locked -p deck
+cargo build -q --release --locked -p kdj
 echo "linux arm64: ok"
 '

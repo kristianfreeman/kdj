@@ -1,0 +1,40 @@
+#!/bin/sh
+# Give this kdj a network name of its own if nothing else did:
+# kdj-<adjective>-<noun>.local, from deploy/pi/names.txt, chosen by the
+# Pi's serial number so it's the same every boot (and after a re-flash).
+# kdj-flash and Raspberry Pi Imager name the card themselves; then the
+# hostname isn't plain "kdj" and this does nothing.
+set -eu
+
+words=/opt/kdj/share/names.txt
+[ "$(cat /etc/hostname 2>/dev/null)" = kdj ] || exit 0
+[ -r "$words" ] || exit 0
+
+if [ -r /proc/device-tree/serial-number ]; then
+    serial=$(tr -d '\000' </proc/device-tree/serial-number)
+else
+    serial=$(cat /etc/machine-id)
+fi
+hash=$(printf '%s' "$serial" | sha256sum | cut -c1-4)
+a=$(printf '%d' "0x$(echo "$hash" | cut -c1-2)")
+n=$(printf '%d' "0x$(echo "$hash" | cut -c3-4)")
+
+pick() { # pick INDEX WORDS...: the word at INDEX modulo the count
+    i=$1
+    shift
+    eval "printf '%s' \"\${$((i % $# + 1))}\""
+}
+# shellcheck disable=SC2046 # word splitting is the point
+adjective=$(pick "$a" $(sed -n 's/^adjectives: //p' "$words"))
+# shellcheck disable=SC2046
+noun=$(pick "$n" $(sed -n 's/^nouns: //p' "$words"))
+name="kdj-$adjective-$noun"
+
+echo "$name" >/etc/hostname
+hostname "$name"
+# Rewritten in place (not replaced), so it works however /etc/hosts is mounted.
+hosts=$(grep -v '^127\.0\.1\.1' /etc/hosts || true)
+printf '%s\n127.0.1.1\t%s\n' "$hosts" "$name" >/etc/hosts
+# Announce the new name on the network (NAME.local).
+systemctl try-restart avahi-daemon.service || true
+echo "kdj-name: this Pi is $name"

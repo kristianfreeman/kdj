@@ -21,11 +21,11 @@ test-full:
 	cargo test --workspace --locked -- --include-ignored
 
 scenarios:
-	cargo run -q --release -p deck-sim -- scenarios
+	cargo run -q --release -p kdj-sim -- scenarios
 
 # Perf budgets (perf-budgets.toml); exits non-zero if anything is over.
 perf:
-	cargo run -q --release -p deck-sim -- perf
+	cargo run -q --release -p kdj-sim -- perf
 
 # Lint, test and build on Linux arm64 (the Pi) in Docker.
 linux:
@@ -33,13 +33,13 @@ linux:
 
 # SD cards: what's plugged in and on them; write the newest image to one.
 card:
-	cargo run -q --release -p deck-flash
+	cargo run -q --release -p kdj-flash
 
 flash:
-	cargo run -q --release -p deck-flash -- flash
+	cargo run -q --release -p kdj-flash -- flash
 
 # Raspberry Pi 4 SD card image with the deck preinstalled, in Docker
-# (target/image/deck-rpi4-<date>.img.xz; see deploy/pi/README.md).
+# (target/image/kdjos-rpi4-<date>.img.xz; see deploy/pi/README.md).
 image:
 	deploy/pi/image/build.sh
 

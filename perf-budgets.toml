@@ -3,7 +3,7 @@
 # Until Milestone 2 measures on a real Pi, host timings are scaled by
 # `pi_slowdown` to estimate Pi timings. 12x is a deliberately pessimistic guess
 # for an Apple M4-class core versus a Cortex-A72 at 1.8 GHz; replace it with a
-# measured ratio once the Pi is on the bench (`deck-sim perf` runs there too).
+# measured ratio once the Pi is on the bench (`kdj-sim perf` runs there too).
 
 [host]
 pi_slowdown = 12.0

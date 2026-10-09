@@ -1,0 +1,24 @@
+[package]
+name = "kdj-engine"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+audioadapter-buffers = "5"
+rtrb = "0.4.0"
+rubato = "5.0.1"
+rustfft = "6.4.1"
+serde = { version = "1.0.229", features = ["derive"] }
+signalsmith-stretch = "0.1.3"
+symphonia = { version = "0.6.1", features = ["all"] }
+toml = "1.1.7"
+triple_buffer = "9.0.0"
+
+[dev-dependencies]
+assert_no_alloc = "1.1.2"
+
+[lints]
+workspace = true

@@ -1,0 +1,6 @@
+# Words for each kdj's network name: kdj-<adjective>-<noun>.local.
+# kdj-flash picks one when it writes a card; a Pi with no name of its own
+# makes one from its serial number on first boot (deploy/pi/kdj-name).
+# 64 of each: short, easy to say across a booth, no two alike.
+adjectives: amber azure bold brisk bright calm clear cobalt coral crisp dark deep dusky early ember fast fern field firm fleet frost gentle gold green grey hollow iron ivory jade keen kind late lunar maple mellow misty noble north oak olive opal pale pine plain proud quick quiet rapid red rust sable salt silver slate solar steady still stone swift tidal velvet warm west wild
+nouns: anchor arrow aspen badger basin beacon birch bison canyon cedar comet condor cove crane delta dune eagle echo falcon fjord fox glacier gull harbor hawk heron horizon island jaguar kestrel lagoon lark lynx marsh meadow mesa moose orbit osprey otter owl panther pebble pike prairie quail raven reef ridge river robin sparrow spruce summit swan thistle thunder tiger tundra valley vapor willow wolf wren

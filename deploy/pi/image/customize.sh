@@ -1,18 +1,18 @@
 #!/bin/bash
 # Runs in a privileged Debian arm64 container (see build.sh). Two steps:
 #
-#   customize.sh prepare BASE.img.xz   decompress to /out/work/deck.img and
+#   customize.sh prepare BASE.img.xz   decompress to /out/work/kdj.img and
 #                                      print the image's Debian codename
 #   customize.sh build NAME            grow it, install the deck in a chroot
 #                                      (chroot.sh), shrink it, and write
 #                                      /out/NAME.img.xz and NAME.img.xz.sha256
 #
 # Mounts: /src the repository (read-only), /out target/image (with the
-# binary at /out/build/deck), /cache the downloaded image.
+# binary at /out/build/kdj), /cache the downloaded image.
 set -euo pipefail
 
-img=/out/work/deck.img
-root=/mnt/deck
+img=/out/work/kdj.img
+root=/mnt/kdj
 loop=
 say() { printf '\n== %s\n' "$*" >&2; }
 
@@ -78,23 +78,23 @@ prepare() {
     detach
 }
 
-# What this build is, as key=value lines (deck-image.txt on the card, and
+# What this build is, as key=value lines (kdj-image.txt on the card, and
 # the .info file next to the image, which adds the uncompressed size).
 info() {
-    echo "# The deck's SD card image (deploy/pi/image). deck-flash status reads this."
+    echo "# The deck's SD card image (deploy/pi/image). kdj-flash status reads this."
     echo "image=$name"
     echo "built=$built"
-    echo "deck=${DECK_VERSION:-unknown}"
-    echo "commit=${DECK_COMMIT:-unknown}"
-    echo "base=${DECK_BASE:-unknown}"
+    echo "kdj=${KDJ_VERSION:-unknown}"
+    echo "commit=${KDJ_COMMIT:-unknown}"
+    echo "base=${KDJ_BASE:-unknown}"
 }
 
 build() {
-    local name=$1 grow=${DECK_IMAGE_GROW:-1536M}
+    local name=$1 grow=${KDJ_IMAGE_GROW:-1536M}
     built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     tools
     [ -f "$img" ] || { echo "run prepare first" >&2; exit 1; }
-    [ -x /out/build/deck ] || { echo "no /out/build/deck" >&2; exit 1; }
+    [ -x /out/build/kdj ] || { echo "no /out/build/kdj" >&2; exit 1; }
 
     say "Growing the root partition by $grow"
     truncate -s "+$grow" "$img"
@@ -122,21 +122,21 @@ build() {
     chmod 755 "$root/usr/sbin/policy-rc.d"
 
     # Stage the binary and deploy/pi (install.sh and its files).
-    local stage=$root/tmp/deck-install
+    local stage=$root/tmp/kdj-install
     rm -rf "$stage"
     mkdir -p "$stage/deploy" "$stage/config"
     cp -a /src/deploy/pi "$stage/deploy/pi"
     cp -a /src/config/midi-example.toml "$stage/config/"
-    install -m 755 /out/build/deck "$stage/deck"
+    install -m 755 /out/build/kdj "$stage/kdj"
 
     say "Installing in the chroot"
-    chroot "$root" /tmp/deck-install/deploy/pi/image/chroot.sh
+    chroot "$root" /tmp/kdj-install/deploy/pi/image/chroot.sh
 
     rm -rf "$stage" "$root/usr/sbin/policy-rc.d"
     cp -a /tmp/resolv.conf.image "$root/etc/resolv.conf"
     # Which build this is, on the boot partition (readable from any
-    # computer), for deck-flash status.
-    info >"$root/boot/firmware/deck-image.txt"
+    # computer), for kdj-flash status.
+    info >"$root/boot/firmware/kdj-image.txt"
     local after
     after=$(cd "$root" && ls -l etc/machine-id etc/ssh/ssh_host_* 2>/dev/null; cat etc/machine-id 2>/dev/null)
     if [ "$before" != "$after" ]; then
@@ -198,47 +198,47 @@ boot_test() {
     attach --read-only
     mkdir -p "$root"
     mount -o ro "${loop}p2" "$root"
-    local probe=/tmp/deck-probe log=/tmp/deck-probe/out/log
+    local probe=/tmp/kdj-probe log=/tmp/kdj-probe/out/log
     rm -rf "$probe"
     mkdir -p "$probe/out"
-    cat >"$probe/deck-probe.service" <<'UNIT'
+    cat >"$probe/kdj-probe.service" <<'UNIT'
 [Unit]
-Description=deck image boot test
-After=multi-user.target deck.service
+Description=kdj image boot test
+After=multi-user.target kdj.service
 [Service]
 Type=oneshot
-StandardOutput=append:/deck-probe-out/log
+StandardOutput=append:/kdj-probe-out/log
 StandardError=inherit
-ExecStart=/bin/sh /usr/local/sbin/deck-probe
+ExecStart=/bin/sh /usr/local/sbin/kdj-probe
 UNIT
-    cat >"$probe/deck-probe" <<'PROBE'
+    cat >"$probe/kdj-probe" <<'PROBE'
 #!/bin/sh
 sleep 12
-for u in deck.service getty@tty1.service autovt@tty1.service bluetooth.service \
+for u in kdj.service getty@tty1.service autovt@tty1.service bluetooth.service \
     apt-daily.timer apt-daily-upgrade.timer man-db.timer e2scrub_all.timer \
     dpkg-db-backup.timer NetworkManager-wait-online.service \
     systemd-networkd-wait-online.service NetworkManager.service; do
     echo "probe: is-enabled $u $(systemctl is-enabled "$u" 2>&1)"
 done
 echo "probe: getty@tty1 $(systemctl is-active getty@tty1.service)"
-echo "probe: deck $(systemctl show deck.service -p ActiveState -p SubState -p NRestarts | tr '\n' ' ')"
-journalctl -b -u deck.service -o cat --no-pager | grep -v '^ALSA lib' | tail -n 4 | sed 's/^/probe: journal: /'
-echo "probe: sudo $(sudo -n -l -U deck 2>/dev/null | tail -n 1)"
+echo "probe: kdj $(systemctl show kdj.service -p ActiveState -p SubState -p NRestarts | tr '\n' ' ')"
+journalctl -b -u kdj.service -o cat --no-pager | grep -v '^ALSA lib' | tail -n 4 | sed 's/^/probe: journal: /'
+echo "probe: sudo $(sudo -n -l -U kdj 2>/dev/null | tail -n 1)"
 echo "probe: done"
 systemctl poweroff
 PROBE
     timeout --signal=KILL 180 systemd-nspawn --quiet --register=no --keep-unit \
         --directory="$root" --volatile=overlay --boot \
-        --bind-ro="$probe/deck-probe.service:/etc/systemd/system/deck-probe.service" \
-        --bind-ro="$probe/deck-probe:/usr/local/sbin/deck-probe" \
-        --bind="$probe/out:/deck-probe-out" \
-        systemd.wants=deck-probe.service </dev/null >"$probe/console" 2>&1 || true
+        --bind-ro="$probe/kdj-probe.service:/etc/systemd/system/kdj-probe.service" \
+        --bind-ro="$probe/kdj-probe:/usr/local/sbin/kdj-probe" \
+        --bind="$probe/out:/kdj-probe-out" \
+        systemd.wants=kdj-probe.service </dev/null >"$probe/console" 2>&1 || true
     umount "$root"
     detach
     grep '^probe: ' "$log" >&2 || { cat "$probe/console" >&2; echo "the boot test didn't finish" >&2; exit 1; }
     local bad=0 u
     grep -q '^probe: done' "$log" || bad=1
-    grep -q '^probe: is-enabled deck.service enabled$' "$log" || bad=1
+    grep -q '^probe: is-enabled kdj.service enabled$' "$log" || bad=1
     for u in getty@tty1 bluetooth apt-daily apt-daily-upgrade man-db e2scrub_all dpkg-db-backup \
         NetworkManager-wait-online systemd-networkd-wait-online; do
         if grep -q "^probe: is-enabled $u\.[a-z]* enabled$" "$log"; then bad=1; echo "$u enabled after first boot" >&2; fi
@@ -246,8 +246,8 @@ PROBE
     grep -q '^probe: is-enabled autovt@tty1.service masked$' "$log" || bad=1
     grep -q '^probe: getty@tty1 active$' "$log" && bad=1
     # Restarted (it has no sound card here) and still going: no start limit.
-    grep -Eq '^probe: deck .*NRestarts=([3-9]|[1-9][0-9])' "$log" || bad=1
-    grep -q '^probe: deck .*ActiveState=failed' "$log" && bad=1
+    grep -Eq '^probe: kdj .*NRestarts=([3-9]|[1-9][0-9])' "$log" || bad=1
+    grep -q '^probe: kdj .*ActiveState=failed' "$log" && bad=1
     grep -q 'NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot' "$log" || bad=1
     [ "$bad" -eq 0 ] || { echo "boot test failed" >&2; exit 1; }
     echo "boot test: ok" >&2

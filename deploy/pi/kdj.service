@@ -1,0 +1,36 @@
+# The deck, full screen on the Pi's display from boot, no desktop.
+[Unit]
+Description=kdj DJ deck
+# As early as the sound card and the display can be there. Not waiting for
+# the network: Ableton Link picks up interfaces as they come up.
+After=local-fs.target systemd-udev-trigger.service sound.target
+# The deck owns the screen: no login prompt on it.
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+# Never give up restarting: a crash must not leave a black screen.
+StartLimitIntervalSec=0
+
+[Service]
+User=kdj
+SupplementaryGroups=audio video render input plugdev
+EnvironmentFile=-/etc/kdj/kdj.env
+# KMS/DRM straight to the display, no X or Wayland.
+Environment=SDL_VIDEODRIVER=kmsdrm
+# The display's VT, so the console doesn't draw over us.
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+# Full clock speed: frequency scaling adds audio jitter. (Best effort.)
+ExecStartPre=-+/bin/sh -c 'for g in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do echo performance > "$g"; done'
+ExecStart=/opt/kdj/bin/kdj --fullscreen $KDJ_ARGS
+WorkingDirectory=/var/lib/kdj
+Restart=always
+RestartSec=1
+# The audio thread asks for SCHED_FIFO 80 and memory is locked: allow both.
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target

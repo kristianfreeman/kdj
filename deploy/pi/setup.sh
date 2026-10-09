@@ -10,9 +10,9 @@
 #   deploy/pi/setup.sh --build-only     # just build and install the binary
 #
 # Safe to run again (after a `git pull`, say): it rebuilds and reinstalls,
-# keeps /etc/deck/deck.env, and replaces only its own block in config.txt.
+# keeps /etc/kdj/kdj.env, and replaces only its own block in config.txt.
 #
-# For an HDMI screen, set its mode: DECK_HDMI_MODE=800x480@60 deploy/pi/setup.sh
+# For an HDMI screen, set its mode: KDJ_HDMI_MODE=800x480@60 deploy/pi/setup.sh
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -54,14 +54,14 @@ fi
 rustup update stable >/dev/null 2>&1 || true
 
 say "Build (10–20 minutes the first time on a Pi 4)"
-(cd "$repo" && cargo build --release --locked -p deck)
+(cd "$repo" && cargo build --release --locked -p kdj)
 
 say "Install"
 # install.sh does the rest (shared with the SD card image build).
 flags=()
 [ "$build_only" -eq 1 ] && flags+=(--binary-only)
 [ "$boot_config" -eq 0 ] && flags+=(--no-boot-config)
-sudo env DECK_HDMI_MODE="${DECK_HDMI_MODE:-}" "$here/install.sh" "${flags[@]}" "$repo/target/release/deck"
+sudo env KDJ_HDMI_MODE="${KDJ_HDMI_MODE:-}" "$here/install.sh" "${flags[@]}" "$repo/target/release/kdj"
 [ "$build_only" -eq 1 ] && exit 0
 
 say "Done"
@@ -69,6 +69,6 @@ cat <<'MSG'
 Next:
   1. Check the DAC overlay and display lines in config.txt suit your hardware.
   2. sudo reboot — the deck starts full screen.
-  3. Logs: journalctl -u deck -f   (look for "audio: realtime priority")
-  4. Stop it to use the console: sudo systemctl stop deck
+  3. Logs: journalctl -u kdj -f   (look for "audio: realtime priority")
+  4. Stop it to use the console: sudo systemctl stop kdj
 MSG
