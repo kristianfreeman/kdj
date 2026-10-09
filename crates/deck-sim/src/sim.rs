@@ -7,12 +7,14 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use deck_engine::session::{self, LocalSession};
-use deck_engine::{Action, Edge, Engine, EngineConfig, EngineHandle, Snapshot, Track};
+use deck_engine::{Action, Edge, Engine, EngineConfig, EngineHandle, InputSender, Snapshot, Track};
 use hdrhistogram::Histogram;
 
 pub struct Sim {
     pub engine: Engine,
     pub handle: EngineHandle,
+    /// A controller's queue, as the MIDI thread has.
+    pub controller: Option<InputSender>,
     pub track: Arc<Track>,
     pub block: usize,
     out: Vec<f32>,
@@ -32,14 +34,15 @@ impl Sim {
         let cfg = EngineConfig {
             sample_rate: track.sample_rate,
             max_block: block.max(64),
-            extra_inputs: 0,
+            extra_inputs: 1,
             ..Default::default()
         };
-        let (engine, mut handle, _) = Engine::new(cfg);
+        let (engine, mut handle, inputs) = Engine::new(cfg);
         handle.load(Arc::clone(&track)).map_err(|_| anyhow!("a fresh engine refused the load"))?;
         let mut sim = Self {
             engine,
             handle,
+            controller: inputs.into_iter().next(),
             track,
             block,
             out: vec![0.0; block * 2],

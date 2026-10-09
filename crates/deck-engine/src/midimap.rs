@@ -14,6 +14,10 @@
 //! up = "JogForward"
 //! down = "JogBack"
 //!
+//! [[midi.map]]               # a fader (absolute CC): the tempo fader
+//! cc = 4
+//! fader = "Tempo"
+//!
 //! [[midi.map]]               # channel (1–16) and deck (0 = A, 1 = B) are optional
 //! channel = 2
 //! note = 36
@@ -45,7 +49,7 @@ pub struct MidiConfig {
     pub leds: Option<bool>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Binding {
     /// 1–16; any channel if omitted.
@@ -63,6 +67,13 @@ pub struct Binding {
     pub up: Option<Action>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub down: Option<Action>,
+    /// For faders (absolute CCs): what it controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fader: Option<FaderKind>,
+    /// A fader that's faster pushed away from you (up) rather than pulled
+    /// towards you, as on a CDJ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invert: Option<bool>,
     /// How the encoder encodes direction; two's complement if omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encoding: Option<Encoding>,
@@ -72,6 +83,13 @@ pub struct Binding {
     /// The note that lights this button's LED, if not its own note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub led: Option<u8>,
+}
+
+/// What a fader controls.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub enum FaderKind {
+    /// Tempo across the deck's range, with soft takeover.
+    Tempo,
 }
 
 /// How relative encoders say which way they turned.
@@ -102,6 +120,18 @@ pub struct Hit {
     pub repeat: u8,
 }
 
+/// What a MIDI message means.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Event {
+    Hit(Hit),
+    /// A fader moved: `position` from -1 (slowest, for tempo) to 1.
+    Fader {
+        kind: FaderKind,
+        position: f64,
+        target: Target,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Source {
     Note(u8),
@@ -112,6 +142,7 @@ enum Source {
 enum Control {
     Button(Action),
     Encoder { up: Action, down: Action, encoding: Encoding },
+    Fader { kind: FaderKind, invert: bool },
 }
 
 /// (0-based channel, or None for any channel; which note or CC).
@@ -134,10 +165,15 @@ impl MidiMap {
                 (None, Some(c)) => Source::Cc(c),
                 _ => bail!("midi mapping {}: give exactly one of note or cc", i + 1),
             };
-            let control = match (b.action, b.up, b.down) {
-                (Some(a), None, None) => Control::Button(a),
-                (None, Some(up), Some(down)) => Control::Encoder { up, down, encoding: b.encoding.unwrap_or_default() },
-                _ => bail!("midi mapping {}: give either action, or up and down", i + 1),
+            let control = match (b.action, b.up, b.down, b.fader) {
+                (Some(a), None, None, None) => Control::Button(a),
+                (None, Some(up), Some(down), None) => {
+                    Control::Encoder { up, down, encoding: b.encoding.unwrap_or_default() }
+                }
+                (None, None, None, Some(kind)) if matches!(source, Source::Cc(_)) => {
+                    Control::Fader { kind, invert: b.invert.unwrap_or(false) }
+                }
+                _ => bail!("midi mapping {}: give one of action, up and down, or fader (on a cc)", i + 1),
             };
             let channel = match b.channel {
                 None => None,
@@ -166,7 +202,7 @@ impl MidiMap {
 
     /// Decode one MIDI message.
     #[must_use]
-    pub fn decode(&self, msg: &[u8]) -> Option<Hit> {
+    pub fn decode(&self, msg: &[u8]) -> Option<Event> {
         let (&status, data) = msg.split_first()?;
         let channel = status & 0x0f;
         let (source, value) = match (status & 0xf0, data) {
@@ -182,18 +218,28 @@ impl MidiMap {
             Control::Button(action) => {
                 let pressed = if matches!(source, Source::Note(_)) { value > 0 } else { value >= 64 };
                 let edge = if pressed { Edge::Press } else { Edge::Release };
-                Some(Hit { action, edge, target, repeat: 1 })
+                Some(Event::Hit(Hit { action, edge, target, repeat: 1 }))
             }
+            Control::Fader { kind, invert } => Some(Event::Fader { kind, position: fader(value, invert), target }),
             Control::Encoder { up, down, encoding } => {
                 let ticks = ticks(value, encoding);
                 if ticks == 0 {
                     return None;
                 }
                 let action = if ticks > 0 { up } else { down };
-                Some(Hit { action, edge: Edge::Press, target, repeat: ticks.unsigned_abs() })
+                Some(Event::Hit(Hit { action, edge: Edge::Press, target, repeat: ticks.unsigned_abs() }))
             }
         }
     }
+}
+
+/// A 7-bit fader value as -1..1. Like a CDJ, pulled towards you (0) is
+/// fastest unless inverted. The middle two values are exactly 0, a detent
+/// where 7 bits have no centre.
+fn fader(value: u8, invert: bool) -> f64 {
+    let v = f64::from(value & 0x7f);
+    let centred = if (63.0..=64.0).contains(&v) { 0.0 } else { (63.5 - v) / 63.5 };
+    if invert { -centred } else { centred }
 }
 
 /// Signed tick count from a relative encoder's value.
@@ -240,6 +286,13 @@ mod tests {
         action = "LoopToggle"
     "#;
 
+    fn hit(m: &MidiMap, msg: &[u8]) -> Option<Hit> {
+        match m.decode(msg)? {
+            Event::Hit(h) => Some(h),
+            Event::Fader { .. } => None,
+        }
+    }
+
     fn map() -> MidiMap {
         MidiMap::from_toml(CONFIG).expect("valid config").0
     }
@@ -247,52 +300,69 @@ mod tests {
     #[test]
     fn notes_press_and_release() {
         let m = map();
-        let on = m.decode(&[0x90, 36, 100]).expect("mapped");
+        let on = hit(&m, &[0x90, 36, 100]).expect("mapped");
         assert_eq!((on.action, on.edge, on.target), (Action::PlayPause, Edge::Press, Target::Focused));
-        assert_eq!(m.decode(&[0x90, 36, 0]).map(|h| h.edge), Some(Edge::Release), "velocity 0 is a release");
-        assert_eq!(m.decode(&[0x80, 36, 64]).map(|h| h.edge), Some(Edge::Release));
-        assert_eq!(m.decode(&[0x90, 37, 100]), None, "unmapped");
+        assert_eq!(hit(&m, &[0x90, 36, 0]).map(|h| h.edge), Some(Edge::Release), "velocity 0 is a release");
+        assert_eq!(hit(&m, &[0x80, 36, 64]).map(|h| h.edge), Some(Edge::Release));
+        assert_eq!(hit(&m, &[0x90, 37, 100]), None, "unmapped");
     }
 
     #[test]
     fn a_channel_specific_binding_wins_and_targets_its_deck() {
         let m = map();
-        let hit = m.decode(&[0x91, 36, 100]).expect("channel 2");
-        assert_eq!((hit.action, hit.target), (Action::Cue, Target::Deck(1)));
-        assert_eq!(m.decode(&[0x92, 36, 100]).map(|h| h.action), Some(Action::PlayPause), "other channels fall back");
+        let h = hit(&m, &[0x91, 36, 100]).expect("channel 2");
+        assert_eq!((h.action, h.target), (Action::Cue, Target::Deck(1)));
+        assert_eq!(hit(&m, &[0x92, 36, 100]).map(|h| h.action), Some(Action::PlayPause), "other channels fall back");
     }
 
     #[test]
     fn encoders_tick_both_ways_in_both_encodings() {
         let m = map();
-        let cw = m.decode(&[0xb0, 0, 1]).expect("tick");
+        let cw = hit(&m, &[0xb0, 0, 1]).expect("tick");
         assert_eq!((cw.action, cw.repeat), (Action::JogForward, 1));
-        let ccw = m.decode(&[0xb0, 0, 127]).expect("tick");
+        let ccw = hit(&m, &[0xb0, 0, 127]).expect("tick");
         assert_eq!((ccw.action, ccw.repeat), (Action::JogBack, 1));
-        let fast = m.decode(&[0xb0, 0, 125]).expect("three ticks back");
+        let fast = hit(&m, &[0xb0, 0, 125]).expect("three ticks back");
         assert_eq!((fast.action, fast.repeat), (Action::JogBack, 3));
-        let up = m.decode(&[0xb0, 1, 66]).expect("offset encoding");
+        let up = hit(&m, &[0xb0, 1, 66]).expect("offset encoding");
         assert_eq!((up.action, up.repeat), (Action::TempoUp, 2));
-        assert_eq!(m.decode(&[0xb0, 1, 63]).map(|h| h.action), Some(Action::TempoDown));
-        assert_eq!(m.decode(&[0xb0, 1, 64]), None, "no movement");
+        assert_eq!(hit(&m, &[0xb0, 1, 63]).map(|h| h.action), Some(Action::TempoDown));
+        assert_eq!(hit(&m, &[0xb0, 1, 64]), None, "no movement");
     }
 
     #[test]
     fn a_cc_button_presses_at_64_and_up() {
         let m = map();
-        assert_eq!(m.decode(&[0xb0, 20, 127]).map(|h| h.edge), Some(Edge::Press));
-        assert_eq!(m.decode(&[0xb0, 20, 0]).map(|h| h.edge), Some(Edge::Release));
+        assert_eq!(hit(&m, &[0xb0, 20, 127]).map(|h| h.edge), Some(Edge::Press));
+        assert_eq!(hit(&m, &[0xb0, 20, 0]).map(|h| h.edge), Some(Edge::Release));
     }
 
     #[test]
     fn the_example_mapping_parses() {
         let (map, cfg) = MidiMap::from_toml(include_str!("../../../config/midi-example.toml")).expect("valid");
         assert_eq!(cfg.port.as_deref(), Some("XONE:K3"));
-        assert_eq!(map.decode(&[0x90, 36, 127]).map(|h| h.action), Some(Action::PlayPause));
+        assert_eq!(hit(&map, &[0x90, 36, 127]).map(|h| h.action), Some(Action::PlayPause));
+    }
+
+    #[test]
+    fn a_fader_runs_fastest_pulled_towards_you_with_a_centre_detent() {
+        let src =
+            "[[midi.map]]\ncc = 4\nfader = \"Tempo\"\n[[midi.map]]\ncc = 5\nfader = \"Tempo\"\ninvert = true\ndeck = 1";
+        let (m, _) = MidiMap::from_toml(src).expect("valid");
+        let pos = |msg: &[u8]| match m.decode(msg) {
+            Some(Event::Fader { kind: FaderKind::Tempo, position, .. }) => position,
+            other => panic!("not a tempo fader: {other:?}"),
+        };
+        assert!((pos(&[0xb0, 4, 0]) - 1.0).abs() < 1e-12, "bottom: fastest");
+        assert!((pos(&[0xb0, 4, 127]) + 1.0).abs() < 1e-12);
+        assert!(pos(&[0xb0, 4, 63]).abs() < 1e-12 && pos(&[0xb0, 4, 64]).abs() < 1e-12, "centre detent");
+        assert!((pos(&[0xb0, 5, 127]) - 1.0).abs() < 1e-12, "inverted: top is fastest");
+        assert!(matches!(m.decode(&[0xb0, 5, 0]), Some(Event::Fader { target: Target::Deck(1), .. })));
     }
 
     #[test]
     fn bad_bindings_are_rejected() {
+        assert!(MidiMap::from_toml("[[midi.map]]\nnote = 1\nfader = \"Tempo\"").is_err(), "a fader is a cc");
         assert!(MidiMap::from_toml("[[midi.map]]\nnote = 1\ncc = 2\naction = \"Cue\"").is_err());
         assert!(MidiMap::from_toml("[[midi.map]]\nnote = 1\nup = \"TempoUp\"").is_err());
         assert!(MidiMap::from_toml("[[midi.map]]\nchannel = 17\nnote = 1\naction = \"Cue\"").is_err());

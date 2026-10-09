@@ -535,12 +535,18 @@ fn nudge_arrows(f: &mut Frame, ax: f32, dir: f32) {
 }
 
 /// Tempo fader position starting at `bx`: centre tick, filled marker.
+/// The tempo across its range: a solid marker. A hardware fader that hasn't
+/// caught up with the tempo yet (soft takeover) shows as a hollow one.
 fn tempo_fader(f: &mut Frame, bx: f32, s: &Snapshot) {
     let range = if s.wide_range { 16.0 } else { 8.0 };
     let (by, bw) = (458.0, 150.0);
     f.outline([bx, by, bw, 12.0], 1.0, FAINT);
     f.rect(bx + bw / 2.0 - 0.5, by - 3.0, 1.0, 18.0, DIM);
-    let mx = narrow(s.tempo_pct / range).mul_add(bw / 2.0 - 3.0, bx + bw / 2.0);
+    let x_of = |pct: f64| narrow((pct / range).clamp(-1.0, 1.0)).mul_add(bw / 2.0 - 3.0, bx + bw / 2.0);
+    if let Some(hw) = s.fader {
+        f.outline([x_of(hw) - 4.0, by - 2.0, 8.0, 16.0], 1.5, FG);
+    }
+    let mx = x_of(s.tempo_pct);
     f.rect(mx - 3.0, by + 2.0, 6.0, 8.0, FG);
 }
 

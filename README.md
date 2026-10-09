@@ -103,7 +103,8 @@ trailing client:port numbers, which change between boots, are ignored);
 without one the first input that isn't ALSA's "Midi Through" is used.
 `--midi-port NAME` picks the port for both `--midi` and `--midi-learn`,
 overriding the file. Pads and buttons press and release; endless encoders
-send one press-and-release per click (jog, tempo, loop size, browse). The
+send one press-and-release per click (jog, tempo, loop size, browse);
+faders are absolute. The
 deck waits for the controller if it isn't there yet and reconnects on its
 own if it's unplugged. Deck actions go from the MIDI
 thread straight into the engine, without waiting for a screen frame. See
@@ -115,6 +116,12 @@ and LOOP, stored hot cues. The light goes to the button's own note on its
 channel, which is how most controllers (the Xone:K2/K3 included) address
 their LEDs; `led_offset` picks a K3 colour (0 red, 36 amber, 72 green) and
 `leds = false` turns it off.
+
+A fader can be the tempo fader (`fader = "Tempo"`; MIDI learn asks for
+it). Like a CDJ's, pulled towards you is faster. It takes over only once
+it reaches the deck's tempo, so after SYNC or a tempo button nothing
+jumps; until then the screen shows where it is as a hollow marker beside
+the tempo. SYNC owns the tempo while it's on.
 
 ## Raspberry Pi
 

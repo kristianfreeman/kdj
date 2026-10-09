@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use deck_engine::midimap::{Binding, Encoding, MidiConfig, MidiMap, Target};
+use deck_engine::midimap::{Binding, Encoding, Event, FaderKind, Hit, MidiConfig, MidiMap, Target};
 use deck_engine::{Action, Edge, InputSender};
 use midir::{MidiInput, MidiInputConnection, MidiInputPort};
 use serde::Serialize;
@@ -66,14 +66,30 @@ impl Dispatch {
     }
 
     fn handle(&mut self, msg: &[u8]) {
-        let Some(hit) = self.map.decode(msg) else { return };
+        match self.map.decode(msg) {
+            Some(Event::Hit(hit)) => self.hit(hit, self.is_encoder(msg)),
+            Some(Event::Fader { kind: FaderKind::Tempo, position, target }) => {
+                let deck = self.deck(target);
+                if let Some(engine) = self.decks.get_mut(deck) {
+                    engine.tempo_fader(position);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Which deck a control drives.
+    fn deck(&self, target: Target) -> usize {
         let last = self.decks.len().saturating_sub(1);
-        let deck = match hit.target {
+        match target {
             Target::Focused => self.focus.load(Ordering::Relaxed),
             Target::Deck(d) => d,
         }
-        .min(last);
-        let encoder = self.is_encoder(msg);
+        .min(last)
+    }
+
+    fn hit(&mut self, hit: Hit, encoder: bool) {
+        let deck = self.deck(hit.target);
         for _ in 0..hit.repeat {
             if hit.action.is_ui() {
                 let _ = self.ui.send((hit.action, hit.edge, deck));
@@ -224,6 +240,7 @@ pub fn base_name(name: &str) -> &str {
 enum Ask {
     Button(Action, &'static str),
     Encoder(Action, Action, &'static str),
+    Fader(FaderKind, &'static str),
 }
 
 const LEARN: &[Ask] = &[
@@ -233,6 +250,7 @@ const LEARN: &[Ask] = &[
     Ask::Button(Action::NudgeBack, "NUDGE BACK (hold)"),
     Ask::Button(Action::NudgeForward, "NUDGE FORWARD (hold)"),
     Ask::Encoder(Action::TempoUp, Action::TempoDown, "TEMPO encoder"),
+    Ask::Fader(FaderKind::Tempo, "TEMPO fader"),
     Ask::Button(Action::TempoReset, "TEMPO RESET"),
     Ask::Button(Action::KeyLock, "KEY LOCK"),
     Ask::Button(Action::LoopToggle, "LOOP on/off"),
@@ -303,22 +321,16 @@ fn learn_one(ask: &Ask, rx: &mpsc::Receiver<Heard>) -> Option<Binding> {
     let (label, prompt) = match ask {
         Ask::Button(_, l) => (*l, "press it"),
         Ask::Encoder(_, _, l) => (*l, "turn it one click clockwise"),
+        Ask::Fader(_, l) => (*l, "move it from end to end, finishing at the FASTER end"),
     };
     println!("  {label}: {prompt}");
+    if let Ask::Fader(kind, _) = ask {
+        return learn_fader(*kind, rx);
+    }
     let msg = next_control(rx)?;
     let (status, data) = msg.split_first()?;
     let channel = Some((status & 0x0f) + 1);
-    let mut b = Binding {
-        channel,
-        note: None,
-        cc: None,
-        action: None,
-        up: None,
-        down: None,
-        encoding: None,
-        deck: None,
-        led: None,
-    };
+    let mut b = Binding { channel, ..Binding::default() };
     match (status & 0xf0, data) {
         (0x90, &[note, ..]) => b.note = Some(note),
         (0xb0, &[cc, value, ..]) => {
@@ -333,8 +345,45 @@ fn learn_one(ask: &Ask, rx: &mpsc::Receiver<Heard>) -> Option<Binding> {
     match ask {
         Ask::Button(a, _) => b.action = Some(*a),
         Ask::Encoder(up, down, _) => (b.up, b.down) = (Some(*up), Some(*down)),
+        Ask::Fader(..) => {}
     }
     println!("    → {}", describe(&b));
+    Some(b)
+}
+
+/// A fader: the CC it sends, and which end is faster from where it stopped
+/// (the low end, towards you, as on a CDJ; or the high end: inverted).
+fn learn_fader(kind: FaderKind, rx: &mpsc::Receiver<Heard>) -> Option<Binding> {
+    let (status, cc, mut last) = loop {
+        match rx.recv().ok()? {
+            Heard::Enter => return None,
+            Heard::Midi(m) => {
+                if let &[s, cc, v, ..] = m.as_slice()
+                    && s & 0xf0 == 0xb0
+                {
+                    break (s, cc, v);
+                }
+            }
+        }
+    };
+    // Follow it until it rests.
+    while let Ok(heard) = rx.recv_timeout(Duration::from_millis(700)) {
+        if let Heard::Midi(m) = heard
+            && let &[s, c, v, ..] = m.as_slice()
+            && (s, c) == (status, cc)
+        {
+            last = v;
+        }
+    }
+    let invert = last >= 64;
+    let b = Binding {
+        channel: Some((status & 0x0f) + 1),
+        cc: Some(cc),
+        fader: Some(kind),
+        invert: invert.then_some(true),
+        ..Binding::default()
+    };
+    println!("    → {}{}", describe(&b), if invert { ", faster at the top" } else { ", faster towards you" });
     Some(b)
 }
 

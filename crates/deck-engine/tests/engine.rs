@@ -7,7 +7,7 @@ use std::sync::Arc;
 use assert_no_alloc::assert_no_alloc;
 use deck_engine::analysis::{self, synth::SynthSpec};
 use deck_engine::track::{GridSource, HOT_CUES, Waveform};
-use deck_engine::{Action, BeatGrid, Edge, Engine, EngineConfig, EngineHandle, Snapshot, Track};
+use deck_engine::{Action, BeatGrid, Edge, Engine, EngineConfig, EngineHandle, InputSender, Snapshot, Track};
 
 #[cfg(debug_assertions)]
 #[global_allocator]
@@ -30,6 +30,8 @@ fn same(a: f64, b: f64) -> bool {
 struct Rig {
     engine: Engine,
     handle: EngineHandle,
+    /// A controller's queue (MIDI).
+    controller: InputSender,
     out: Vec<f32>,
     grid: BeatGrid,
 }
@@ -50,10 +52,11 @@ impl Rig {
             hot_cues: [None; HOT_CUES],
             waveform: Waveform { hop: 320, columns: Vec::new() },
         };
-        let (engine, mut handle, _) =
-            Engine::new(EngineConfig { sample_rate: SR, max_block: 512, extra_inputs: 0, ..Default::default() });
+        let (engine, mut handle, inputs) =
+            Engine::new(EngineConfig { sample_rate: SR, max_block: 512, extra_inputs: 1, ..Default::default() });
         assert!(handle.load(Arc::new(track)).is_ok(), "load refused");
-        let mut rig = Self { engine, handle, out: vec![0.0; BLOCK * 2], grid };
+        let [controller]: [InputSender; 1] = inputs.try_into().unwrap_or_else(|_| unreachable!("asked for one"));
+        let mut rig = Self { engine, handle, controller, out: vec![0.0; BLOCK * 2], grid };
         if !keylock {
             rig.press(Action::KeyLock);
         }
@@ -423,4 +426,31 @@ fn needle_search_moves_a_stopped_deck_and_leaves_a_playing_one() {
     rig.handle.needle(0.0);
     let s = rig.run(1);
     assert!(s.pos > before, "a playing deck ignores the needle");
+}
+
+#[test]
+fn a_tempo_fader_takes_over_only_once_it_reaches_the_tempo() {
+    let mut rig = Rig::new(true);
+    // The deck is at +2% (buttons); the fader starts at -4%.
+    for _ in 0..2 {
+        rig.press(Action::TempoUpCoarse);
+    }
+    let fader = |rig: &mut Rig, pct: f64| {
+        rig.controller.tempo_fader(pct / 8.0);
+        rig.run(1)
+    };
+    let s = fader(&mut rig, -4.0);
+    assert!(same(s.tempo_pct, 2.0), "no jump: {}", s.tempo_pct);
+    assert_eq!(s.fader, Some(-4.0), "the screen shows where the fader is");
+    assert!(same(fader(&mut rig, 1.0).tempo_pct, 2.0), "still below the tempo");
+    // Moving through +2% picks it up.
+    let s = fader(&mut rig, 3.0);
+    assert!(same(s.tempo_pct, 3.0) && s.fader.is_none(), "took over: {} {:?}", s.tempo_pct, s.fader);
+    assert!(same(fader(&mut rig, -1.5).tempo_pct, -1.5), "now it follows the fader");
+    // A button moves the tempo away: the fader has to catch up again.
+    let s = rig.press(Action::TempoReset);
+    assert_eq!(s.fader, Some(-1.5));
+    assert!(same(fader(&mut rig, -1.0).tempo_pct, 0.0));
+    assert!(same(fader(&mut rig, 0.0).tempo_pct, 0.0), "reached it");
+    assert!(same(fader(&mut rig, 0.5).tempo_pct, 0.5));
 }

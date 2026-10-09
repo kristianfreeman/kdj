@@ -5,7 +5,7 @@
 #
 # Notes are buttons (press / release); `cc` with `action` is a button too
 # (64 and up = pressed). `cc` with `up` / `down` is an endless encoder:
-# one action per click. `channel` is 1–16 (any if omitted); `deck` is
+# one action per click. `cc` with `fader` is an absolute fader. `channel` is 1–16 (any if omitted); `deck` is
 # 0 = A, 1 = B (the focused deck if omitted).
 
 [midi]
@@ -33,6 +33,13 @@ down = "JogBack"
 cc = 1
 up = "TempoUp"
 down = "TempoDown"
+
+# A fader (absolute CC) as the tempo fader. Like a CDJ, pulled towards you
+# is faster; `invert = true` for the other way round. It takes over only
+# once it reaches the deck's tempo, so nothing jumps after SYNC or a button.
+[[midi.map]]
+cc = 16
+fader = "Tempo"
 
 [[midi.map]]
 cc = 2

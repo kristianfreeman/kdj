@@ -34,6 +34,9 @@ const BPM_STEP: f64 = 0.01;
 /// How far a nudge moves the playhead while paused, in beats.
 const PAUSED_NUDGE_BEATS: f64 = 0.125;
 const DEFAULT_LOOP: usize = 2; // 4 beats
+/// A hardware tempo fader takes over within this many percent of the
+/// deck's tempo (about one 7-bit MIDI step across ±8%), or once it crosses it.
+const TAKEOVER_PCT: f64 = 0.15;
 /// Playback rate limits, whatever tempo, sync and nudges ask for. The key
 /// lock scratch buffer is sized for `MAX_RATE`.
 const MIN_RATE: f64 = 0.25;
@@ -70,6 +73,15 @@ struct Preview {
     by: Action,
     /// Where releasing returns to.
     from: f64,
+}
+
+/// A hardware tempo fader, with soft takeover.
+#[derive(Clone, Copy, Debug, Default)]
+struct Fader {
+    /// Where it is, -1 to 1; None until it first moves.
+    pos: Option<f64>,
+    /// It's reached the deck's tempo and now sets it.
+    engaged: bool,
 }
 
 /// Everything about following or leading the shared timeline.
@@ -127,6 +139,9 @@ pub struct Snapshot {
     pub cue: f64,
     pub hot_cues: [Option<HotCue>; HOT_CUES],
     pub tempo_pct: f64,
+    /// A hardware tempo fader's position, as a tempo, while it hasn't caught
+    /// up with the deck's tempo yet (soft takeover); None once it has.
+    pub fader: Option<f64>,
     pub wide_range: bool,
     pub keylock: bool,
     pub quantize: bool,
@@ -191,8 +206,16 @@ impl std::fmt::Debug for EngineHandle {
     }
 }
 
+/// What a controller thread sends the engine.
+#[derive(Clone, Copy, Debug)]
+enum Input {
+    Action(Action, Edge),
+    /// The tempo fader's position, -1 (slowest) to 1 (fastest).
+    TempoFader(f64),
+}
+
 /// A queue of actions from another thread (e.g. MIDI), straight to the engine.
-pub struct InputSender(Producer<(Action, Edge)>);
+pub struct InputSender(Producer<Input>);
 
 impl std::fmt::Debug for InputSender {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -202,7 +225,13 @@ impl std::fmt::Debug for InputSender {
 
 impl InputSender {
     pub fn send(&mut self, action: Action, edge: Edge) -> bool {
-        self.0.push((action, edge)).is_ok()
+        self.0.push(Input::Action(action, edge)).is_ok()
+    }
+
+    /// A tempo fader moved to `position`: -1 slowest, 0 centre, 1 fastest
+    /// (across the tempo range).
+    pub fn tempo_fader(&mut self, position: f64) -> bool {
+        self.0.push(Input::TempoFader(position)).is_ok()
     }
 }
 
@@ -244,7 +273,7 @@ impl EngineHandle {
 
 pub struct Engine {
     commands: Consumer<Command>,
-    inputs: Vec<Consumer<(Action, Edge)>>,
+    inputs: Vec<Consumer<Input>>,
     garbage: Producer<Arc<Track>>,
     snapshot: triple_buffer::Input<Snapshot>,
 
@@ -263,6 +292,7 @@ pub struct Engine {
     heard_fed: f64,
     cue: f64,
     tempo_pct: f64,
+    fader: Fader,
     wide_range: bool,
     keylock: bool,
     quantize: bool,
@@ -324,6 +354,7 @@ impl Engine {
             heard_fed: 0.0,
             cue: 0.0,
             tempo_pct: 0.0,
+            fader: Fader::default(),
             wide_range: false,
             keylock: true,
             quantize: true,
@@ -419,8 +450,11 @@ impl Engine {
             }
         }
         for i in 0..self.inputs.len() {
-            while let Ok((a, e)) = self.inputs[i].pop() {
-                self.input(a, e);
+            while let Ok(input) = self.inputs[i].pop() {
+                match input {
+                    Input::Action(a, e) => self.input(a, e),
+                    Input::TempoFader(p) => self.tempo_fader(p),
+                }
             }
         }
     }
@@ -512,6 +546,7 @@ impl Engine {
         self.link.locked = true;
         // The readout shows the synced tempo, and keeps it if SYNC goes off.
         self.tempo_pct = (f.base_rate - 1.0) * 100.0;
+        self.fader.engaged = false;
         if quantum.is_none() {
             self.link.error = 0.0;
             self.link.rate = Some(f.base_rate);
@@ -895,7 +930,33 @@ impl Engine {
         if self.wide_range { FINE_STEP_WIDE } else { FINE_STEP_NARROW }
     }
 
+    /// A hardware tempo fader moved. Soft takeover: it only takes over once
+    /// it reaches (or crosses) the deck's tempo, so after SYNC, a button or a
+    /// range change nothing jumps. SYNC owns the tempo while it's on.
+    fn tempo_fader(&mut self, pos: f64) {
+        if !pos.is_finite() {
+            return;
+        }
+        let pos = pos.clamp(-1.0, 1.0);
+        let range = self.tempo_range();
+        let (target, prev) = (pos * range, self.fader.pos.map(|p| p * range));
+        self.fader.pos = Some(pos);
+        if self.link.mode == SyncMode::Follow {
+            self.fader.engaged = false;
+            return;
+        }
+        let here = self.tempo_pct;
+        let crossed = prev.is_some_and(|p| (p - here).signum() != (target - here).signum());
+        if self.fader.engaged || crossed || (target - here).abs() <= TAKEOVER_PCT {
+            self.fader.engaged = true;
+            let step = self.fine_step();
+            self.tempo_pct = (target / step).round() * step;
+        }
+    }
+
     fn set_tempo(&mut self, pct: f64) {
+        // Buttons move the tempo away from the fader: it has to catch up.
+        self.fader.engaged = false;
         let range = self.tempo_range();
         let step = self.fine_step();
         // SYNC can leave the tempo outside the range: from there, presses
@@ -969,6 +1030,7 @@ impl Engine {
             cue: self.cue,
             hot_cues: self.hot_cues,
             tempo_pct: self.tempo_pct,
+            fader: self.fader.pos.filter(|_| !self.fader.engaged).map(|p| p * self.tempo_range()),
             wide_range: self.wide_range,
             keylock: self.keylock,
             quantize: self.quantize,
@@ -1009,6 +1071,7 @@ impl Snapshot {
             cue: 0.0,
             hot_cues: [None; HOT_CUES],
             tempo_pct: 0.0,
+            fader: None,
             wide_range: false,
             keylock: true,
             quantize: true,
