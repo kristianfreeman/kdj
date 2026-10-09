@@ -23,6 +23,7 @@ mod audio;
 #[cfg(feature = "link")]
 mod link;
 mod midi;
+mod touch;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -43,6 +44,7 @@ use deck_ui::Ui;
 use deck_ui::browser::{self, Browser};
 use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Mod};
+use sdl2::mouse::MouseButton;
 
 #[cfg(debug_assertions)]
 #[global_allocator]
@@ -436,7 +438,7 @@ fn run() -> Result<()> {
     };
     app.set_focus(0);
     let midi = start_midi(&args, midi_inputs, &app.shared_focus)?;
-    let mut input = Input { keymap, held: HashMap::new() };
+    let mut input = Input { keymap, held: HashMap::new(), touch: touch::Touch::default() };
     let mut frames = Frames { started: Instant::now(), loaded: false, snaps: Vec::with_capacity(app.slots.len()) };
     let mut audio_watch = AudioWatch { errors: 0, lost: false, logged: Instant::now() };
     // Without vsync, pace the loop to about 60 fps instead of spinning a core.
@@ -446,7 +448,7 @@ fn run() -> Result<()> {
         let frame_start = Instant::now();
         // Input first, straight to the engines, before this frame's render.
         for event in events.poll_iter() {
-            if !input.handle(&mut app, event) {
+            if !input.handle(&mut app, &screen.window, event) {
                 return Ok(());
             }
         }
@@ -630,12 +632,25 @@ struct Input {
     /// What each held key pressed (and on which deck), so its release goes to
     /// the same place even if the browser or focus changed in between.
     held: HashMap<String, (Action, usize)>,
+    touch: touch::Touch,
 }
 
 impl Input {
     /// Handle one window event; false when the window is closing.
-    fn handle(&mut self, app: &mut App, event: Event) -> bool {
+    fn handle(&mut self, app: &mut App, window: &sdl2::video::Window, event: Event) -> bool {
+        let at = |x: i32, y: i32| logical(window, app.slots.len(), x, y);
         match event {
+            Event::MouseButtonDown { mouse_btn: MouseButton::Left, x, y, .. } => {
+                if let Some((slot, p)) = at(x, y) {
+                    self.touch.down(app, slot, p);
+                }
+            }
+            Event::MouseMotion { mousestate, x, y, .. } if mousestate.left() => {
+                if let Some((_, p)) = at(x, y) {
+                    self.touch.motion(app, p);
+                }
+            }
+            Event::MouseButtonUp { mouse_btn: MouseButton::Left, .. } => self.touch.up(app),
             Event::Quit { .. } => return false,
             Event::KeyDown { keycode: Some(k), keymod, repeat, .. } => self.key_down(app, k, keymod, repeat),
             Event::KeyUp { keycode: Some(k), .. } => {
@@ -662,6 +677,18 @@ impl Input {
             app.act(a, Edge::Press, target);
         }
     }
+}
+
+/// A window point (as SDL reports mouse and touch positions) as a deck slot
+/// and a logical position on its screen.
+fn logical(window: &sdl2::video::Window, slots: usize, x: i32, y: i32) -> Option<(usize, [f32; 2])> {
+    let (w, _) = window.size();
+    let size = window.drawable_size();
+    // Pixels per point: 2 on a high-DPI screen. Window sizes fit in u16.
+    let px = |v: u32| f32::from(u16::try_from(v).unwrap_or(u16::MAX));
+    let pt = |v: i32| f32::from(i16::try_from(v).unwrap_or(i16::MAX));
+    let scale = px(size.0) / px(w.max(1));
+    deck_ui::to_logical(size, slots, [pt(x) * scale, pt(y) * scale])
 }
 
 /// What the render loop keeps from frame to frame.
@@ -725,7 +752,7 @@ fn draw_decks(app: &mut App, snaps: &[Snapshot], size: (u32, u32), hud_text: &st
         let other = (n > 1).then(|| &snaps[(i + 1) % n]);
         let empty = app.slots[i].current.is_none();
         let status = if focused && empty && app.status.is_empty() {
-            "Tab to browse"
+            "Tap here or press Tab to browse"
         } else if focused {
             &app.status
         } else {

@@ -6,11 +6,12 @@
 
 use std::fmt::Write;
 
-use deck_engine::Snapshot;
+use deck_engine::{Action, Snapshot};
 
 use crate::draw::{Frame, Rgba, count_f32, grey, whole};
 use crate::scene::{HEIGHT, WIDTH, remaining_secs};
 use crate::text::{Align, Atlas, Style};
+use crate::touch::Target;
 
 const BG: Rgba = grey(11);
 const FG: Rgba = grey(242);
@@ -18,7 +19,7 @@ const DIM: Rgba = grey(140);
 const FAINT: Rgba = grey(70);
 
 pub const ROWS: usize = 12;
-const ROW_H: f32 = 30.0;
+pub const ROW_H: f32 = 30.0;
 const LIST_Y: f32 = 70.0;
 /// Track list columns: artist, key, BPM (right-aligned), time (right-aligned).
 const CX_ARTIST: f32 = 390.0;
@@ -133,6 +134,23 @@ impl Browser {
         }
     }
 
+    /// Highlight item `i` of the current level.
+    pub fn select(&mut self, i: usize) {
+        if let Some(l) = self.levels.last_mut()
+            && i < l.items.len()
+        {
+            l.cursor = i;
+        }
+    }
+
+    /// Scroll the list by `d` rows (a drag), keeping the highlight on screen.
+    pub fn scroll_by(&mut self, d: isize) {
+        let Some(l) = self.levels.last_mut() else { return };
+        let max_top = l.items.len().saturating_sub(ROWS);
+        l.top = l.top.saturating_add_signed(d).min(max_top);
+        l.cursor = l.cursor.clamp(l.top, (l.top + ROWS).min(l.items.len()).saturating_sub(1).max(l.top));
+    }
+
     pub fn draw(&mut self, f: &mut Frame, atlas: &Atlas, s: &Snapshot, status: &str) {
         self.breadcrumbs(f, atlas);
         if let Some(l) = self.levels.last() {
@@ -160,6 +178,9 @@ impl Browser {
             text.push_str(if self.scanning { "Reading library…" } else { "No Rekordbox library found" });
         }
         trim_left(text, atlas, Style::Body, WIDTH - 200.0);
+        if self.levels.len() > 1 {
+            f.touch.add([0.0, 0.0, WIDTH - 180.0, 46.0], Target::Back);
+        }
         atlas.draw(f, Style::Body, 16.0, 32.0, Align::Left, text, FG);
         if let Some(l) = self.levels.last() {
             text.clear();
@@ -174,6 +195,7 @@ impl Browser {
         for (i, item) in level.items.iter().enumerate().skip(level.top).take(ROWS) {
             let y = count_f32(i - level.top).mul_add(ROW_H, LIST_Y);
             let selected = i == level.cursor;
+            f.touch.add([16.0, y, WIDTH - 32.0, ROW_H], Target::Row(i));
             if selected {
                 f.rect(16.0, y, WIDTH - 32.0, ROW_H - 2.0, FG);
             }
@@ -201,6 +223,9 @@ impl Browser {
         let fy = HEIGHT - 44.0;
         f.rect(0.0, fy, WIDTH, 1.0, FAINT);
         let (px, py) = (16.0, fy + 12.0);
+        f.touch.add([px - 8.0, fy + 4.0, 36.0, 38.0], Target::Action(Action::PlayPause));
+        // The hint corner closes the browser.
+        f.touch.add([WIDTH - 220.0, fy + 4.0, 220.0, 40.0], Target::Action(Action::Browse));
         f.tri([px, py], [px, py + 22.0], [px + 19.0, py + 11.0], FG);
         if !s.playing {
             f.tri([px + 2.5, py + 5.0], [px + 2.5, py + 17.0], [px + 13.0, py + 11.0], BG);
@@ -214,9 +239,9 @@ impl Browser {
         let hint = if !status.is_empty() {
             status
         } else if self.depth() > 1 {
-            "↵ open / load   ← back   tab close"
+            "↵ open / load   ← back   tab close ×"
         } else {
-            "↵ open / load   tab close"
+            "↵ open / load   tab close ×"
         };
         atlas.draw(
             f,

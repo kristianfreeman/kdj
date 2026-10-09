@@ -104,6 +104,8 @@ pub struct Lead {
 pub enum Command {
     Load(Arc<Track>),
     Input(Action, Edge),
+    /// Needle search to this fraction of the track (0–1).
+    Needle(f64),
 }
 
 /// What the engine looks like right now. Copied out once per audio callback.
@@ -202,6 +204,12 @@ impl InputSender {
 impl EngineHandle {
     pub fn send(&mut self, action: Action, edge: Edge) -> bool {
         self.commands.push(Command::Input(action, edge)).is_ok()
+    }
+
+    /// Needle search: jump to `fraction` (0–1) of the track. Like a CDJ with
+    /// needle lock, only while stopped; a playing deck ignores it.
+    pub fn needle(&mut self, fraction: f64) -> bool {
+        self.commands.push(Command::Needle(fraction)).is_ok()
     }
 
     /// Load a track. Refused while playing: a live deck never swaps under you.
@@ -398,6 +406,11 @@ impl Engine {
             match cmd {
                 Command::Load(t) => self.load(t),
                 Command::Input(a, e) => self.input(a, e),
+                Command::Needle(f) => {
+                    if !self.playing && f.is_finite() {
+                        self.seek(f.clamp(0.0, 1.0) * self.track_end());
+                    }
+                }
             }
         }
         for i in 0..self.inputs.len() {

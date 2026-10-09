@@ -6,6 +6,7 @@ pub mod draw;
 pub mod gpu;
 pub mod scene;
 pub mod text;
+pub mod touch;
 
 use std::time::{Duration, Instant};
 
@@ -98,6 +99,12 @@ impl Ui {
         self.gpu.draw(&self.scene.frame, [left, bottom, w, h], [WIDTH, HEIGHT], fit);
     }
 
+    /// The control at a logical point of the last built frame.
+    #[must_use]
+    pub fn hit(&self, x: f32, y: f32) -> Option<touch::Hit> {
+        self.scene.frame.touch.hit(x, y)
+    }
+
     /// Render the last built frame offscreen as RGBA.
     ///
     /// # Errors
@@ -106,6 +113,26 @@ impl Ui {
     pub fn snapshot_rgba(&mut self) -> Result<(u32, u32, Vec<u8>)> {
         self.gpu.render_offscreen(&self.scene.frame, [WIDTH, HEIGHT], self.scale)
     }
+}
+
+/// Which of `slots` stacked deck screens a device-pixel point on a `size`
+/// surface falls in, and where on that screen in logical pixels (the inverse
+/// of `Ui::draw_slot`). None in the letterbox margins.
+#[must_use]
+pub fn to_logical(size: (u32, u32), slots: usize, px: [f32; 2]) -> Option<(usize, [f32; 2])> {
+    let (fit, [w, h]) = letterbox(size, slots);
+    let (sw, sh) = (to_i32(size.0), to_i32(size.1));
+    #[expect(clippy::cast_precision_loss, reason = "window sizes in pixels are far below 2^24")]
+    let (left, top) = (((sw - w) / 2) as f32, ((sh - h * to_i32(slots)) / 2) as f32);
+    let (x, y) = ((px[0] - left) / fit, (px[1] - top) / fit);
+    if !(0.0..WIDTH).contains(&x) || y < 0.0 {
+        return None;
+    }
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "non-negative and small")]
+    let slot = (y / HEIGHT) as usize;
+    #[expect(clippy::cast_precision_loss, reason = "a slot index is tiny")]
+    let y = (slot as f32).mul_add(-HEIGHT, y);
+    (slot < slots).then_some((slot, [x, y]))
 }
 
 /// The scale that fits `n` stacked screens into a `size` surface, and one
@@ -123,4 +150,19 @@ fn letterbox(size: (u32, u32), n: usize) -> (f32, [i32; 2]) {
 /// A size or count as a signed pixel value; saturates instead of wrapping.
 fn to_i32(n: impl TryInto<i32>) -> i32 {
     n.try_into().unwrap_or(i32::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn points_map_back_to_the_slot_they_were_drawn_in() {
+        // Two decks on a 1600x1920 surface: scale 2, no margins.
+        assert_eq!(to_logical((1600, 1920), 2, [800.0, 100.0]), Some((0, [400.0, 50.0])));
+        assert_eq!(to_logical((1600, 1920), 2, [20.0, 1000.0]), Some((1, [10.0, 20.0])));
+        // One deck letterboxed into a wide window: 200 px margins each side.
+        assert_eq!(to_logical((1200, 480), 1, [100.0, 10.0]), None);
+        assert_eq!(to_logical((1200, 480), 1, [200.0, 10.0]), Some((0, [0.0, 10.0])));
+    }
 }

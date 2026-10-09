@@ -408,3 +408,17 @@ fn a_hot_cue_held_while_stopped_previews_and_returns() {
     let s = rig.release(Action::Cue);
     assert!(s.previewing);
 }
+
+#[test]
+fn needle_search_moves_a_stopped_deck_and_leaves_a_playing_one() {
+    let mut rig = Rig::new(true);
+    let end = rig.handle.snapshot().track_frames;
+    rig.handle.needle(0.5);
+    let s = rig.run(1);
+    assert!(same(s.pos, as_f64(usize::try_from(end).unwrap_or_default()) * 0.5), "at {}", s.pos);
+    rig.press(Action::PlayPause);
+    let before = rig.run(1).pos;
+    rig.handle.needle(0.0);
+    let s = rig.run(1);
+    assert!(s.pos > before, "a playing deck ignores the needle");
+}

@@ -55,6 +55,16 @@ Return = "Cue"
 Space = "BrowseLoad"
 ```
 
+## Touch
+
+On the touchscreen (or with a mouse) every control on screen is a button:
+play, CUE (previews while held), the loop sizes and LOOP, and the MASTER /
+SYNC / KEY / Q / range badges. Tap the title to open the browser. Touch or
+drag along the overview to needle-search while the deck is stopped; a
+playing deck ignores it, like a CDJ's needle lock. In the browser, tap a
+row to highlight it and tap it again to open or load it; drag to scroll; tap
+the path at the top to go back and the bottom-right corner to close.
+
 ## Ableton Link
 
 Every deck joins the Link session on the local network (`--no-link` to

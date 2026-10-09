@@ -6,13 +6,14 @@
 
 use std::fmt::Write;
 
-use deck_engine::Snapshot;
 use deck_engine::action::LOOP_SIZES;
 use deck_engine::grid::BeatGrid;
 use deck_engine::sync::SyncMode;
+use deck_engine::{Action, Snapshot};
 
 use crate::draw::{Frame, Rgba, Wave, alpha, count_f32, count_f64, grey, narrow, whole};
 use crate::text::{Align, Atlas, Style};
+use crate::touch::Target;
 
 pub const WIDTH: f32 = 800.0;
 pub const HEIGHT: f32 = 480.0;
@@ -30,6 +31,15 @@ const PLAYHEAD_X: f32 = WIDTH / 2.0;
 /// Beats visible across the detail waveform, per zoom level.
 pub const ZOOM_BEATS: [f64; 4] = [8.0, 16.0, 32.0, 64.0];
 const LOW_TIME_SECS: f64 = 30.0;
+/// The beat-loop buttons, in `LOOP_SIZES` order.
+const BEAT_LOOPS: [Action; 6] = [
+    Action::BeatLoop1,
+    Action::BeatLoop2,
+    Action::BeatLoop4,
+    Action::BeatLoop8,
+    Action::BeatLoop16,
+    Action::BeatLoop32,
+];
 const HOT_CUE_LETTERS: [&str; 8] = ["A", "B", "C", "D", "E", "F", "G", "H"];
 /// Left edge of the readouts beside the transport, and of the time column.
 const READOUT_X: f32 = 96.0;
@@ -113,6 +123,7 @@ impl Scene {
         let Some(t) = track.filter(|_| s.track_frames > 0) else {
             let msg = if status.is_empty() { "No track" } else { status };
             centred_message(&mut self.frame, atlas, msg);
+            self.frame.touch.add([0.0, 0.0, WIDTH, HEIGHT], Target::Action(Action::Browse));
             return;
         };
         self.header(atlas, s, t, view);
@@ -142,13 +153,21 @@ impl Scene {
             let mut buf = [0u8; 4];
             badge_box(f, atlas, [16.0, 8.0, 30.0, 28.0], letter.encode_utf8(&mut buf), focused) + 12.0
         });
-        let mut x = WIDTH - 16.0;
         let range = if s.wide_range { "±16" } else { "±8" };
-        x = badge(f, atlas, x, 10.0, range, false) - 8.0;
-        x = badge(f, atlas, x, 10.0, "Q", s.quantize) - 8.0;
-        x = badge(f, atlas, x, 10.0, "KEY", s.keylock) - 8.0;
-        x = badge(f, atlas, x, 10.0, "SYNC", s.sync == SyncMode::Follow) - 8.0;
-        x = badge(f, atlas, x, 10.0, "MASTER", s.sync == SyncMode::Lead) - 16.0;
+        let badges = [
+            (range, false, Action::TempoRange),
+            ("Q", s.quantize, Action::Quantize),
+            ("KEY", s.keylock, Action::KeyLock),
+            ("SYNC", s.sync == SyncMode::Follow, Action::Sync),
+            ("MASTER", s.sync == SyncMode::Lead, Action::Master),
+        ];
+        let mut x = WIDTH - 16.0;
+        for (label, on, action) in badges {
+            let left = badge(f, atlas, x, 10.0, label, on);
+            f.touch.add([left, 10.0, x - left, 24.0], Target::Action(action));
+            x = left - 8.0;
+        }
+        x -= 8.0;
         // Where the grid came from, and Link peers: plain text, not toggles.
         let text = &mut self.text;
         text.clear();
@@ -157,7 +176,10 @@ impl Scene {
             let _ = write!(text, " · Link {peers}");
         }
         let src_w = atlas.draw(f, Style::Label, x, 27.0, Align::Right, text, DIM);
-        atlas.draw_clipped(f, Style::Body, title_x, 27.0, x - src_w - 16.0 - title_x, t.title, FG);
+        let title_w = x - src_w - 16.0 - title_x;
+        atlas.draw_clipped(f, Style::Body, title_x, 27.0, title_w, t.title, FG);
+        // The title opens the browser, like a CDJ's BROWSE button.
+        f.touch.add([title_x, 4.0, title_w, 36.0], Target::Action(Action::Browse));
     }
 
     fn detail(&mut self, atlas: &Atlas, snap: &Snapshot, track: TrackInfo, view: &View) {
@@ -232,6 +254,7 @@ impl Scene {
             played_col: frac(snap.pos) * cols,
         });
         let frame = &mut self.frame;
+        frame.touch.add(OVERVIEW, Target::Needle);
         if snap.loop_active {
             let (l0, l1) = (x + frac(snap.loop_start) * w, x + frac(snap.loop_end) * w);
             frame.hatch(l0, y, (l1 - l0).max(3.0), h, alpha(FG, 90));
@@ -261,6 +284,8 @@ impl Scene {
         // CUE lamp: filled when parked on the cue point or previewing it.
         let at_cue = s.previewing || (!s.playing && (s.pos - s.cue).abs() < 1.0);
         badge_box(f, atlas, [x, 410.0, 54.0, 32.0], "CUE", at_cue);
+        f.touch.add([x - 8.0, y - 6.0, 58.0, 52.0], Target::Action(Action::PlayPause));
+        f.touch.add([x, 410.0, 54.0, 32.0], Target::Action(Action::Cue));
     }
 
     fn readouts(&mut self, atlas: &Atlas, s: &Snapshot) {
@@ -342,8 +367,9 @@ impl Scene {
         let f = &mut self.frame;
         let text = &mut self.text;
         let y = 426.0;
-        for (i, size) in (0u8..).zip(LOOP_SIZES) {
+        for ((i, size), action) in (0u8..).zip(LOOP_SIZES).zip(BEAT_LOOPS) {
             let cx = f32::from(i).mul_add(LOOP_PITCH, LOOP_X);
+            f.touch.add([cx, y, 38.0, 32.0], Target::Action(action));
             #[expect(
                 clippy::float_cmp,
                 reason = "loop_beats is copied from LOOP_SIZES, so equality picks out the entry"
@@ -360,6 +386,7 @@ impl Scene {
             }
         }
         let lx = LOOP_PITCH.mul_add(6.0, LOOP_X) + 4.0;
+        f.touch.add([lx, y, 112.0, 32.0], Target::Action(Action::LoopToggle));
         if s.loop_active {
             f.rect(lx, y, 112.0, 32.0, FG);
             atlas.draw(f, Style::Body, lx + 56.0, y + 22.0, Align::Center, "LOOP", BG);
@@ -550,5 +577,46 @@ mod tests {
         status_line(&mut f, &atlas, &long);
         let (lo, hi) = x_range(&f);
         assert!(lo >= TIME_X && hi <= WIDTH - 16.0, "status line spans {lo}..{hi}");
+    }
+
+    /// A snapshot of a deck with a second of silence loaded.
+    fn loaded_snapshot() -> Snapshot {
+        use std::sync::Arc;
+
+        use deck_engine::track::{GridSource, HOT_CUES, Waveform};
+        use deck_engine::{Engine, EngineConfig, Track};
+        let track = Track {
+            id: 1,
+            title: "t".into(),
+            sample_rate: 48_000,
+            samples: vec![0.0; 96_000],
+            grid: BeatGrid::new(128.0, 0.0, 48_000),
+            grid_source: GridSource::Detected,
+            load_cue: None,
+            hot_cues: [None; HOT_CUES],
+            waveform: Waveform { hop: 320, columns: Vec::new() },
+        };
+        let (mut engine, mut handle, _) = Engine::new(EngineConfig::default());
+        assert!(handle.load(Arc::new(track)).is_ok());
+        engine.process(&mut [0.0; 256]);
+        handle.snapshot()
+    }
+
+    #[test]
+    fn every_control_can_be_tapped_where_it_is_drawn() {
+        let atlas = Atlas::new(1.0);
+        let mut scene = Scene::default();
+        let info = TrackInfo { title: "t", hop: 320, columns: 0, overview_columns: 0, rekordbox_grid: false };
+        scene.build(&atlas, &loaded_snapshot(), None, Some(info), &View::default(), "", "");
+        let at = |x: f32, y: f32| scene.frame.touch.hit(x, y).map(|h| h.target);
+        assert_eq!(at(30.0, 370.0), Some(Target::Action(Action::PlayPause)));
+        assert_eq!(at(40.0, 425.0), Some(Target::Action(Action::Cue)));
+        assert_eq!(at(LOOP_X + 19.0, 440.0), Some(Target::Action(Action::BeatLoop1)));
+        assert_eq!(at(LOOP_PITCH.mul_add(5.0, LOOP_X) + 19.0, 440.0), Some(Target::Action(Action::BeatLoop32)));
+        assert_eq!(at(LOOP_PITCH.mul_add(6.0, LOOP_X) + 60.0, 440.0), Some(Target::Action(Action::LoopToggle)));
+        assert_eq!(at(OVERVIEW[0] + 100.0, OVERVIEW[1] + 20.0), Some(Target::Needle));
+        assert_eq!(at(WIDTH - 30.0, 22.0), Some(Target::Action(Action::TempoRange)));
+        assert_eq!(at(60.0, 22.0), Some(Target::Action(Action::Browse)), "the title");
+        assert_eq!(at(PLAYHEAD_X, 150.0), None, "the waveform isn't a control");
     }
 }

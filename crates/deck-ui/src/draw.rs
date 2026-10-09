@@ -50,12 +50,15 @@ pub struct Wave {
 pub struct Frame {
     pub waves: Vec<Wave>,
     pub verts: Vec<Vertex>,
+    /// Where the touchable controls are.
+    pub touch: crate::touch::Targets,
 }
 
 impl Frame {
     pub fn clear(&mut self) {
         self.waves.clear();
         self.verts.clear();
+        self.touch.clear();
     }
 
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgba) {
