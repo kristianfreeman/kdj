@@ -1,5 +1,5 @@
 # One place for the checks. `make check` before pushing; `make full` rarely.
-.PHONY: check lint fmt test test-full perf scenarios full linux
+.PHONY: check lint fmt test test-full perf scenarios full linux image
 
 check: lint test scenarios
 
@@ -30,5 +30,10 @@ perf:
 # Lint, test and build on Linux arm64 (the Pi) in Docker.
 linux:
 	tools/linux-check.sh
+
+# Raspberry Pi 4 SD card image with the deck preinstalled, in Docker
+# (target/image/deck-rpi4-<date>.img.xz; see deploy/pi/README.md).
+image:
+	deploy/pi/image/build.sh
 
 full: check test-full perf

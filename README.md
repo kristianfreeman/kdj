@@ -16,8 +16,8 @@ and marked "auto grid". Loading is refused while the deck plays.
 
 Options: `TRACK` (load a file directly), `--decks 2` (two decks stacked and
 mixed, for beatmatching), `--fullscreen`, `--buffer 128` (frames per audio
-callback), `--device NAME` (the audio output whose name contains NAME; the
-error lists them if none matches), `--hud` (perf overlay), `--keymap
+callback), `--device NAME` (the audio output whose name contains NAME; if none
+matches, it lists them and plays on the default one), `--hud` (perf overlay), `--keymap
 keys.toml`, `--midi k3.toml` / `--midi-learn k3.toml` / `--midi-port NAME`
 (see MIDI controllers), `--no-link` (stay out of Ableton Link sessions),
 `--synth` (synthetic tracks, no files needed).

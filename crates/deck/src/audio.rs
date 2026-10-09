@@ -65,18 +65,31 @@ pub struct Audio {
 
 impl Output {
     /// The output device whose name contains `wanted` (any case), or the
-    /// default one; asking for `buffer` frames per callback.
+    /// default one; asking for `buffer` frames per callback. If nothing
+    /// matches `wanted`, it says so, lists the outputs, and plays on the
+    /// default one: a deck started at boot keeps running (and the log says
+    /// what to put in `--device`) rather than failing over and over.
     pub fn open(buffer: u32, wanted: Option<&str>) -> Result<Self> {
         let host = cpal::default_host();
-        let device = match wanted {
-            None => host.default_output_device().ok_or_else(|| anyhow!("no audio output device"))?,
+        let picked = match wanted {
+            None => None,
             Some(w) => {
                 let devices: Vec<_> = host.output_devices().context("listing output devices")?.collect();
                 let names: Vec<String> = devices.iter().map(label).collect();
                 let pick = names.iter().position(|n| n.to_lowercase().contains(&w.to_lowercase()));
-                pick.and_then(|i| devices.into_iter().nth(i))
-                    .ok_or_else(|| anyhow!("no output device matching {w:?}; there are:\n  {}", names.join("\n  ")))?
+                let device = pick.and_then(|i| devices.into_iter().nth(i));
+                if device.is_none() {
+                    eprintln!(
+                        "audio: no output device matching {w:?}, using the default; there are:\n  {}",
+                        names.join("\n  ")
+                    );
+                }
+                device
             }
+        };
+        let device = match picked {
+            Some(d) => d,
+            None => host.default_output_device().ok_or_else(|| anyhow!("no audio output device"))?,
         };
         let supported = pick_config(&device)?;
         let format = supported.sample_format();

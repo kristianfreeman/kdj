@@ -1,8 +1,8 @@
-# --- deck: added by deploy/pi/setup.sh (everything between these markers) ---
+# --- deck: added by deploy/pi/install.sh (everything between these markers) ---
 [all]
 # Full KMS graphics (the deck draws with GLES 3 straight to the display),
 # without HDMI audio; and no onboard audio: the DAC hat is the only output.
-# setup.sh comments out the stock lines these replace.
+# install.sh comments out the stock lines these replace.
 dtoverlay=vc4-kms-v3d,noaudio
 dtparam=audio=off
 
@@ -12,11 +12,15 @@ dtparam=audio=off
 dtoverlay=hifiberry-dacplus
 
 # The display. HDMI screens need nothing here (set the mode in cmdline.txt,
-# see setup.sh). For a DSI panel, uncomment the line for yours, e.g.:
+# see install.sh). For a DSI panel, uncomment the line for yours, e.g.:
 #dtoverlay=vc4-kms-dsi-7inch
 #dtoverlay=vc4-kms-dsi-waveshare-panel,5_0_inch
 
-# Quiet, quick boot.
+# No Bluetooth: nothing to pair mid-set, and the UART it used is free.
+dtoverlay=disable-bt
+
+# Quiet, quick boot: no rainbow splash (boot messages go to tty3, see
+# cmdline.txt).
 disable_splash=1
 boot_delay=0
 # Optional realtime kernel, from build-rt-kernel.sh:

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Turn a fresh Raspberry Pi OS Lite (64-bit) on a Pi 4 into a deck: build
-# it, install it, mount USB sticks for it, and start it full screen at boot.
+# it, then install.sh installs it, mounts USB sticks for it, and starts it
+# full screen at boot.
 #
 # Run from the repository on the Pi, as your normal user (it uses sudo):
 #
@@ -56,62 +57,12 @@ say "Build (10–20 minutes the first time on a Pi 4)"
 (cd "$repo" && cargo build --release --locked -p deck)
 
 say "Install"
-sudo install -d /opt/deck/bin /etc/deck /media/deck
-sudo install -m 755 "$repo/target/release/deck" /opt/deck/bin/deck
-sudo install -m 755 "$here/deck-usb" /opt/deck/bin/deck-usb
-if [ "$build_only" -eq 1 ]; then
-    echo "Installed /opt/deck/bin/deck."
-    exit 0
-fi
-
-if ! id deck >/dev/null 2>&1; then
-    sudo useradd --system --create-home --home-dir /var/lib/deck --shell /usr/sbin/nologin deck
-fi
-for g in audio video render input plugdev; do
-    if getent group "$g" >/dev/null; then sudo usermod -aG "$g" deck; fi
-done
-[ -f /etc/deck/deck.env ] || sudo install -m 644 "$here/deck.env" /etc/deck/deck.env
-if [ -f "$repo/config/midi-example.toml" ] && [ ! -f /etc/deck/midi-example.toml ]; then
-    sudo install -m 644 "$repo/config/midi-example.toml" /etc/deck/midi-example.toml
-fi
-sudo install -m 644 "$here/deck.service" "$here/deck-usb@.service" /etc/systemd/system/
-sudo install -m 644 "$here/99-deck-usb.rules" /etc/udev/rules.d/
-sudo systemctl daemon-reload
-sudo udevadm control --reload
-sudo systemctl disable getty@tty1.service >/dev/null 2>&1 || true
-sudo systemctl enable deck.service
-
-if [ "$boot_config" -eq 1 ]; then
-    say "Boot configuration"
-    fw=/boot/firmware
-    [ -d "$fw" ] || fw=/boot
-    config=$fw/config.txt
-    cmdline=$fw/cmdline.txt
-    [ -f "$config.deck-backup" ] || sudo cp "$config" "$config.deck-backup"
-    [ -f "$cmdline.deck-backup" ] || sudo cp "$cmdline" "$cmdline.deck-backup"
-    # Our block replaces the stock graphics and audio lines.
-    sudo sed -i \
-        -e '/^# --- deck: added/,/^# --- deck: end ---/d' \
-        -e 's/^dtoverlay=vc4-kms-v3d$/#&  # deck: see below/' \
-        -e 's/^dtparam=audio=on$/#&  # deck: see below/' \
-        "$config"
-    # The block opens with [all], whatever section the file ends in.
-    # shellcheck disable=SC2024 # we read it; sudo tee writes
-    sudo tee -a "$config" <"$here/config.txt" >/dev/null
-    # cmdline.txt is one line: add quiet-boot options it doesn't have yet.
-    opts="quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0"
-    [ -n "${DECK_HDMI_MODE:-}" ] && opts="$opts video=HDMI-A-1:$DECK_HDMI_MODE"
-    line=$(head -n1 "$cmdline")
-    for o in $opts; do
-        key=${o%%=*}
-        case " $line " in
-        *" $key="* | *" $o "*) ;;
-        *) line="$line $o" ;;
-        esac
-    done
-    printf '%s\n' "$line" | sudo tee "$cmdline" >/dev/null
-    echo "Backups: $config.deck-backup, $cmdline.deck-backup"
-fi
+# install.sh does the rest (shared with the SD card image build).
+flags=()
+[ "$build_only" -eq 1 ] && flags+=(--binary-only)
+[ "$boot_config" -eq 0 ] && flags+=(--no-boot-config)
+sudo env DECK_HDMI_MODE="${DECK_HDMI_MODE:-}" "$here/install.sh" "${flags[@]}" "$repo/target/release/deck"
+[ "$build_only" -eq 1 ] && exit 0
 
 say "Done"
 cat <<'MSG'
