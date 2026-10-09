@@ -177,7 +177,7 @@ impl Browser {
             text.push_str(&l.title);
         }
         if self.levels.is_empty() {
-            text.push_str(if self.scanning { "Reading library…" } else { "No Rekordbox library found" });
+            text.push_str(if self.scanning { "Reading library…" } else { "Plug in a Rekordbox USB stick" });
         }
         trim_left(text, atlas, Style::Body, WIDTH - 200.0);
         if self.levels.len() > 1 {

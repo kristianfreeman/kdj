@@ -221,6 +221,9 @@ struct Pending {
     since: Instant,
 }
 
+/// How long a power off / restart press waits for its confirming second press.
+const POWER_CONFIRM: Duration = Duration::from_secs(3);
+
 /// How long a load may take to show up on the deck before it counts as
 /// refused.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(1);
@@ -235,6 +238,8 @@ struct App {
     hud: Hud,
     browser: Browser,
     settings: Settings,
+    /// A power off / restart pressed once, waiting for the second press.
+    armed: Option<(settings::Key, Instant)>,
     libs: Vec<library::Library>,
     /// The library node behind each browser item, level by level.
     nav: Vec<Vec<Node>>,
@@ -314,6 +319,10 @@ impl App {
 
     /// A settings row's button.
     fn setting_action(&mut self, key: settings::Key) {
+        if matches!(key, settings::Key::PowerOff | settings::Key::Restart) {
+            self.power(key);
+            return;
+        }
         match key {
             settings::Key::Rescan => {
                 self.browser.scanning = true;
@@ -322,6 +331,28 @@ impl App {
             }
             settings::Key::Learn => "To map a controller, run: deck --midi-learn FILE".clone_into(&mut self.status),
             _ => {}
+        }
+    }
+
+    /// Power off or restart the Pi, on a second press within a few seconds.
+    fn power(&mut self, key: settings::Key) {
+        let (verb, what) =
+            if key == settings::Key::PowerOff { ("poweroff", "power off") } else { ("reboot", "restart") };
+        let confirmed = self.armed.take().is_some_and(|(k, at)| k == key && at.elapsed() < POWER_CONFIRM);
+        if !confirmed {
+            self.armed = Some((key, Instant::now()));
+            self.status = format!("Press again to {what}");
+            return;
+        }
+        if !cfg!(target_os = "linux") {
+            self.status = format!("Can't {what} from here: that's for the Pi");
+            return;
+        }
+        // Allowed by /etc/sudoers.d/deck, which the Pi setup installs.
+        match std::process::Command::new("sudo").args(["-n", "/usr/bin/systemctl", verb]).status() {
+            Ok(s) if s.success() => self.status = format!("Going to {what}…"),
+            Ok(s) => self.status = format!("Couldn't {what} ({s})"),
+            Err(e) => self.status = format!("Couldn't {what}: {e}"),
         }
     }
 
@@ -484,6 +515,7 @@ fn run() -> Result<()> {
         hud: Hud::new(args.hud),
         browser: Browser::new(args.track.is_none() && !args.synth),
         settings: Settings::new(settings::pages(&settings::Prefs::default(), &settings::SystemInfo::default())),
+        armed: None,
         libs: Vec::new(),
         nav: Vec::new(),
         scanned: Vec::new(),

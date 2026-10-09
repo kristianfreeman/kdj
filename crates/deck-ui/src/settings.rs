@@ -55,6 +55,8 @@ pub enum Key {
     Version,
     Audio,
     Rescan,
+    PowerOff,
+    Restart,
 }
 
 #[derive(Clone, Debug)]
@@ -513,6 +515,18 @@ fn system() -> Vec<Row> {
     vec![
         row(Key::Version, "Version", "GPL-3.0-or-later.", Value::Info(env!("CARGO_PKG_VERSION").into())),
         row(Key::Rescan, "Library", "Read the collection and USB sticks again.", Value::Action("Rescan".into())),
+        row(
+            Key::Restart,
+            "Restart",
+            "Restart the Pi. Tap twice: a stray touch does nothing.",
+            Value::Action("Restart".into()),
+        ),
+        row(
+            Key::PowerOff,
+            "Power off",
+            "Shut down safely before pulling the power. Tap twice.",
+            Value::Action("Power off".into()),
+        ),
     ]
 }
 
