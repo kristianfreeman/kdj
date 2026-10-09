@@ -258,21 +258,23 @@ impl Scene {
             cols_per_px: cols / w,
             played_col: frac(snap.pos) * cols,
         });
+        // x on the strip for a track position.
+        let at = |frames: f64| frac(frames).mul_add(w, x);
         let frame = &mut self.frame;
         frame.touch.add(OVERVIEW, Target::Needle);
         if snap.loop_active {
-            let (l0, l1) = (x + frac(snap.loop_start) * w, x + frac(snap.loop_end) * w);
+            let (l0, l1) = (at(snap.loop_start), at(snap.loop_end));
             frame.hatch(l0, y, (l1 - l0).max(3.0), h, alpha(FG, 90));
             frame.outline([l0 - 1.0, y - 1.0, (l1 - l0).max(3.0) + 2.0, h + 2.0], 1.0, FG);
         }
-        let cx = x + frac(snap.cue) * w;
+        let cx = at(snap.cue);
         frame.tri([cx - 6.0, y + h + 7.0], [cx + 6.0, y + h + 7.0], [cx, y + h - 2.0], FG);
         // Hot cues: small downward ticks along the top edge.
         for hc in snap.hot_cues.iter().flatten() {
-            let hx = x + frac(hc.start) * w;
+            let hx = at(hc.start);
             frame.tri([hx - 4.0, y - 7.0], [hx + 4.0, y - 7.0], [hx, y - 1.0], FG);
         }
-        let px = x + frac(snap.pos) * w;
+        let px = at(snap.pos);
         frame.rect(px - 2.0, y - 3.0, 4.0, h + 6.0, BG);
         frame.rect(px - 1.0, y - 3.0, 2.0, h + 6.0, FG);
         frame.rect(0.0, 334.0, WIDTH, 1.0, FAINT);

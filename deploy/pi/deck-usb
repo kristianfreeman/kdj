@@ -1,0 +1,46 @@
+#!/bin/sh
+# deck-usb mount|unmount DEVICE (e.g. sda1)
+#
+# Mounts a USB stick read-only at /media/deck/<its label>, where the deck's
+# browser looks for Rekordbox exports. Read-only: the deck never writes to a
+# stick, and pulling one out mid-set can't corrupt it.
+set -eu
+
+action=$1
+dev=/dev/$2
+base=/media/deck
+
+label=$(blkid -o value -s LABEL "$dev" 2>/dev/null || true)
+[ -n "$label" ] || label=$2
+# One path component, no surprises.
+label=$(printf '%s' "$label" | tr '/' '_' | tr -d '\000-\037')
+dir=$base/$label
+# Where each device went, so unmount finds it after the stick is gone.
+state=/run/deck-usb
+mkdir -p "$state"
+
+case $action in
+mount)
+    # Two sticks with the same name: tell them apart.
+    if mountpoint -q "$dir"; then dir="$dir ($2)"; fi
+    mkdir -p "$dir"
+    printf '%s' "$dir" > "$state/$2"
+    type=$(blkid -o value -s TYPE "$dev" 2>/dev/null || true)
+    case $type in
+    vfat | exfat) opts=ro,noatime,nodev,nosuid,noexec,uid=deck,gid=deck,iocharset=utf8 ;;
+    *) opts=ro,noatime,nodev,nosuid,noexec ;;
+    esac
+    mount -o "$opts" "$dev" "$dir"
+    ;;
+unmount)
+    # The stick may already be gone: detach whatever's left.
+    if [ -f "$state/$2" ]; then dir=$(cat "$state/$2"); fi
+    umount -l "$dir" 2>/dev/null || true
+    rmdir "$dir" 2>/dev/null || true
+    rm -f "$state/$2"
+    ;;
+*)
+    echo "usage: deck-usb mount|unmount DEVICE" >&2
+    exit 2
+    ;;
+esac

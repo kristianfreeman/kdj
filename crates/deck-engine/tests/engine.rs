@@ -1,15 +1,17 @@
 //! Transport behaviour, checked block by block like the audio callback runs it.
-//! The allocator aborts if `process` allocates.
+//! The allocator aborts if `process` allocates (debug builds; `assert_no_alloc`
+//! checks nothing in release, where these tests still run).
 
 use std::sync::Arc;
 
-use assert_no_alloc::{AllocDisabler, assert_no_alloc};
+use assert_no_alloc::assert_no_alloc;
 use deck_engine::analysis::{self, synth::SynthSpec};
 use deck_engine::track::{GridSource, HOT_CUES, Waveform};
 use deck_engine::{Action, BeatGrid, Edge, Engine, EngineConfig, EngineHandle, Snapshot, Track};
 
+#[cfg(debug_assertions)]
 #[global_allocator]
-static ALLOC: AllocDisabler = AllocDisabler;
+static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
 const SR: u32 = 48_000;
 const BLOCK: usize = 128;

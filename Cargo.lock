@@ -655,6 +655,7 @@ dependencies = [
  "deck-library",
  "deck-ui",
  "glow",
+ "libc",
  "midir",
  "rtrb",
  "rusty_link",

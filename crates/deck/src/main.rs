@@ -23,6 +23,7 @@ mod audio;
 #[cfg(feature = "link")]
 mod link;
 mod midi;
+mod rt;
 mod touch;
 
 use std::collections::HashMap;
@@ -188,6 +189,12 @@ fn scan_in_background(tx: mpsc::Sender<Scan>) {
 }
 
 fn main() {
+    if cfg!(target_os = "linux") {
+        match rt::lock_memory() {
+            Ok(()) => eprintln!("memory: locked"),
+            Err(e) => eprintln!("memory: not locked ({e})"),
+        }
+    }
     if let Err(e) = run() {
         eprintln!("deck: {e:#}");
         std::process::exit(1);
@@ -401,6 +408,7 @@ fn run() -> Result<()> {
     // Audio first: the device decides the sample rate everything runs at.
     let output = audio::Output::open(args.buffer, args.device.as_deref())?;
     let sample_rate = output.sample_rate();
+
     let mut engines = Vec::new();
     let mut handles = Vec::new();
     let mut midi_inputs = Vec::new();
@@ -440,7 +448,7 @@ fn run() -> Result<()> {
     let midi = start_midi(&args, midi_inputs, &app.shared_focus)?;
     let mut input = Input { keymap, held: HashMap::new(), touch: touch::Touch::default() };
     let mut frames = Frames { started: Instant::now(), loaded: false, snaps: Vec::with_capacity(app.slots.len()) };
-    let mut audio_watch = AudioWatch { errors: 0, lost: false, logged: Instant::now() };
+    let mut audio_watch = AudioWatch { errors: 0, lost: false, logged: Instant::now(), rt_logged: false };
     // Without vsync, pace the loop to about 60 fps instead of spinning a core.
     let pace = (!screen.vsync).then(|| Duration::from_micros(16_667));
 
@@ -493,6 +501,8 @@ struct AudioWatch {
     /// The device loss was already logged.
     lost: bool,
     logged: Instant,
+    /// The audio thread's realtime status was logged.
+    rt_logged: bool,
 }
 
 impl AudioWatch {
@@ -501,6 +511,11 @@ impl AudioWatch {
     /// Log new stream errors (at most once a second), and keep a lost device
     /// on screen: the deck has gone quiet and won't come back by itself.
     fn check(&mut self, app: &mut App, audio: &audio::Audio) {
+        let rt = audio.rt.load(Ordering::Relaxed);
+        if !self.rt_logged && rt != rt::UNKNOWN {
+            eprintln!("audio: {}", rt::describe(rt));
+            self.rt_logged = true;
+        }
         let errors = audio.errors.load(Ordering::Relaxed);
         if errors > self.errors && self.logged.elapsed() >= Duration::from_secs(1) {
             eprintln!("audio: {} stream error(s) (xruns or worse), {errors} in all", errors - self.errors);

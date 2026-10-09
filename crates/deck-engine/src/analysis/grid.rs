@@ -72,7 +72,7 @@ pub fn detect(mono: &[f32], sample_rate: u32, cfg: GridConfig) -> BeatGrid {
     fold(odf, on.rate, bpm, &mut hist);
     let phase = peak_phase(&hist); // fraction of a beat, relative to onset frame 0
     let period_s = 60.0 / bpm;
-    let rough_s = on.t0 + phase * period_s + ONSET_DELAY;
+    let rough_s = phase.mul_add(period_s, on.t0) + ONSET_DELAY;
     let first_beat_s = refine_phase(mono, sample_rate, period_s, rough_s);
 
     // Bar 1 lines up with the first kick; then step back whole bars so an

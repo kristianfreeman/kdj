@@ -103,10 +103,10 @@ fn add(out: &mut [f32], sr: f64, at: f64, len: f64, mut voice: impl FnMut(f64) -
 
 /// Pitch-swept sine: 160 Hz falling to 45 Hz, 1 ms attack.
 fn kick(t: f64) -> f64 {
-    let f0 = 45.0;
+    let f0: f64 = 45.0;
     let sweep = 115.0;
     let k = 35.0;
-    let phase = std::f64::consts::TAU * (f0 * t + sweep * (1.0 - (-k * t).exp()) / k);
+    let phase = std::f64::consts::TAU * f0.mul_add(t, sweep * (1.0 - (-k * t).exp()) / k);
     let env = (t / 0.001).min(1.0) * (-t * 9.0).exp();
     0.8 * env * phase.sin()
 }

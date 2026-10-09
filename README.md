@@ -109,6 +109,14 @@ own if it's unplugged. Deck actions go from the MIDI
 thread straight into the engine, without waiting for a screen frame. See
 `config/midi-example.toml` for the format.
 
+## Raspberry Pi
+
+[`deploy/pi`](deploy/pi/README.md) turns Raspberry Pi OS Lite into a deck:
+it builds on the Pi, boots straight into the deck full screen, mounts USB
+sticks for the browser, and sets up the DAC hat. On Linux the audio thread
+runs at realtime priority (`SCHED_FIFO`) and memory is locked when the
+service's limits allow; the log says whether it did.
+
 ## Simulate
 
 Everything except the window and the sound card runs headless in `deck-sim`:
@@ -135,13 +143,18 @@ it occasionally:
 cargo test -- --ignored
 ```
 
+`make linux` lints, tests and builds on Linux arm64 (the Pi's platform) in
+Docker, with the packages the Pi setup installs. The toolchain is pinned in
+`rust-toolchain.toml`, so lints are the same everywhere.
+
 ## Layout
 
 - `crates/deck-engine`: transport, loops, hot cues, nudging, key lock, fallback analysis. No I/O, no UI.
 - `crates/deck-library`: Rekordbox data: analysis files (grids, cues, waveforms) and `export.pdb`.
 - `crates/deck-ui`: the 800×480 screen in OpenGL (3.3 core / ES 3.0).
-- `crates/deck`: the app: SDL2 window, cpal audio, keyboard.
+- `crates/deck`: the app: SDL2 window, cpal audio, keyboard, touch, MIDI, Ableton Link.
 - `crates/deck-sim`: virtual audio clock, scenarios, perf budgets, PNG frames.
+- `deploy/pi`: Raspberry Pi setup: build, boot-to-deck service, USB mounting, boot config.
 
 ## Licence
 

@@ -1,5 +1,5 @@
 # One place for the checks. `make check` before pushing; `make full` rarely.
-.PHONY: check lint fmt test test-full perf scenarios full
+.PHONY: check lint fmt test test-full perf scenarios full linux
 
 check: lint test scenarios
 
@@ -26,5 +26,9 @@ scenarios:
 # Perf budgets (perf-budgets.toml); exits non-zero if anything is over.
 perf:
 	cargo run -q --release -p deck-sim -- perf
+
+# Lint, test and build on Linux arm64 (the Pi) in Docker.
+linux:
+	tools/linux-check.sh
 
 full: check test-full perf

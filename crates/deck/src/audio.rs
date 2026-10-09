@@ -4,7 +4,7 @@
 //! each, like two mixer channels with the faders up.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
@@ -59,6 +59,8 @@ pub struct Audio {
     pub errors: Arc<AtomicU64>,
     /// The device went away (unplugged); the stream is silent from here on.
     pub lost: Arc<AtomicBool>,
+    /// How the audio thread's realtime promotion went (`rt::PROMOTED`, or `-errno`).
+    pub rt: Arc<AtomicI32>,
 }
 
 impl Output {
@@ -76,7 +78,7 @@ impl Output {
                     .ok_or_else(|| anyhow!("no output device matching {w:?}; there are:\n  {}", names.join("\n  ")))?
             }
         };
-        let supported = device.default_output_config().context("querying output config")?;
+        let supported = pick_config(&device)?;
         let format = supported.sample_format();
         let mut config = supported.config();
         if let cpal::SupportedBufferSize::Range { min, max } = supported.buffer_size() {
@@ -94,7 +96,8 @@ impl Output {
         let (tx, rx) = rtrb::RingBuffer::new(4096);
         let errors = Arc::new(AtomicU64::new(0));
         let lost = Arc::new(AtomicBool::new(false));
-        let report = Report { errors: Arc::clone(&errors), lost: Arc::clone(&lost) };
+        let rt = Arc::new(AtomicI32::new(crate::rt::UNKNOWN));
+        let report = Report { errors: Arc::clone(&errors), lost: Arc::clone(&lost), rt: Arc::clone(&rt) };
         let stream = match self.format {
             SampleFormat::F32 => self.build::<f32>(engines, hook, tx, report),
             SampleFormat::I16 => self.build::<i16>(engines, hook, tx, report),
@@ -102,7 +105,7 @@ impl Output {
             f => return Err(anyhow!("unsupported sample format {f}")),
         }?;
         stream.play()?;
-        Ok(Audio { _stream: stream, stats: rx, errors, lost })
+        Ok(Audio { _stream: stream, stats: rx, errors, lost, rt })
     }
 
     fn build<T: SizedSample + FromSample<f32>>(
@@ -117,7 +120,14 @@ impl Output {
         let mut stereo = vec![0.0f32; CHUNK * 2];
         let mut deck_buf = vec![0.0f32; CHUNK * 2];
         let gain = if engines.len() > 1 { 0.5 } else { 1.0 };
+        let rt = Arc::clone(&report.rt);
+        let mut promoted = false;
         let callback = move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
+            if !promoted {
+                // Once, on the audio thread itself: a single syscall.
+                promoted = true;
+                rt.store(crate::rt::promote_current_thread(), Ordering::Relaxed);
+            }
             let t = Instant::now();
             // How long until this callback's first frame is heard.
             let stamp = info.timestamp();
@@ -175,6 +185,29 @@ impl Output {
 struct Report {
     errors: Arc<AtomicU64>,
     lost: Arc<AtomicBool>,
+    rt: Arc<AtomicI32>,
+}
+
+/// Sample formats the deck can write, best first.
+const FORMATS: [SampleFormat; 3] = [SampleFormat::F32, SampleFormat::I32, SampleFormat::I16];
+/// Rates the engine is happy at, best first. Anything far above these just
+/// costs CPU (an ALSA `hw:` device may offer up to 384 kHz).
+const RATES: [u32; 2] = [48_000, 44_100];
+
+/// The stream config to ask for: a preferred rate and format, stereo if
+/// offered; the device's default if nothing fits.
+fn pick_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig> {
+    let ranges: Vec<_> = device.supported_output_configs().context("listing output configs")?.collect();
+    let rank = |r: &cpal::SupportedStreamConfigRange| {
+        let format = FORMATS.iter().position(|&f| f == r.sample_format())?;
+        let rate = RATES.iter().position(|&s| (r.min_sample_rate()..=r.max_sample_rate()).contains(&s))?;
+        Some((rate, format, usize::from(r.channels() != 2), RATES.get(rate).copied()?))
+    };
+    let best = ranges.iter().filter_map(|r| Some((rank(r)?, r))).min_by_key(|(k, _)| (k.0, k.1, k.2));
+    match best {
+        Some(((.., rate), r)) => Ok(r.with_sample_rate(rate)),
+        None => device.default_output_config().context("querying output config"),
+    }
 }
 
 /// A device's name as shown to people (and matched by `--device`).
