@@ -52,13 +52,15 @@ pub enum Item {
 pub struct Level {
     pub title: String,
     pub items: Vec<Item>,
+    /// Tracks the library lists here that can't be played (audio missing).
+    pub missing: usize,
     cursor: usize,
     top: usize,
 }
 
 impl Level {
     pub fn new(title: impl Into<String>, items: Vec<Item>) -> Self {
-        Self { title: title.into(), items, cursor: 0, top: 0 }
+        Self { title: title.into(), items, missing: 0, cursor: 0, top: 0 }
     }
 }
 
@@ -185,6 +187,9 @@ impl Browser {
         if let Some(l) = self.levels.last() {
             text.clear();
             let _ = write!(text, "{} items", l.items.len());
+            if l.missing > 0 {
+                let _ = write!(text, " · {} missing", l.missing);
+            }
             atlas.draw(f, Style::Label, WIDTH - 16.0, 32.0, Align::Right, text, DIM);
         }
     }
@@ -192,6 +197,17 @@ impl Browser {
     /// The visible rows of the current level, and where they sit in it.
     fn list(&mut self, f: &mut Frame, atlas: &Atlas) {
         let Some(level) = self.levels.last() else { return };
+        if level.items.is_empty() {
+            let text = &mut self.text;
+            text.clear();
+            if level.missing > 0 {
+                let _ = write!(text, "{} tracks here, none of them on this source", level.missing);
+            } else {
+                text.push_str("Nothing here");
+            }
+            atlas.draw(f, Style::Body, WIDTH / 2.0, HEIGHT / 2.0, Align::Center, text, DIM);
+            return;
+        }
         for (i, item) in level.items.iter().enumerate().skip(level.top).take(ROWS) {
             let y = count_f32(i - level.top).mul_add(ROW_H, LIST_Y);
             let selected = i == level.cursor;
@@ -335,7 +351,9 @@ pub fn level_for(
             (n, item)
         })
         .unzip();
-    (Level::new(nav::title(libs, node), items), nodes)
+    let mut level = Level::new(nav::title(libs, node), items);
+    level.missing = nav::missing(libs, node);
+    (level, nodes)
 }
 
 #[cfg(test)]

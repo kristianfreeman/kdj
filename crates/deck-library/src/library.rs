@@ -46,6 +46,8 @@ pub struct Playlist {
     pub sort: u32,
     /// Indexes into `Library::entries`, in playlist order.
     pub tracks: Vec<usize>,
+    /// Entries whose track isn't there (audio not on the stick).
+    pub missing: usize,
 }
 
 #[derive(Debug)]
@@ -149,16 +151,18 @@ fn from_export(source: &Source, root: &Path, db: crate::pdb::Database) -> Librar
     let mut playlists: Vec<Playlist> = db
         .playlists
         .into_iter()
-        .map(|p| Playlist {
-            tracks: db
-                .entries
-                .get(&p.id)
-                .map_or(Vec::new(), |ids| ids.iter().filter_map(|id| index.get(id).copied()).collect()),
-            id: p.id,
-            parent: p.parent,
-            name: p.name.nfc().collect(),
-            folder: p.folder,
-            sort: p.sort,
+        .map(|p| {
+            let ids = db.entries.get(&p.id).map_or(&[][..], Vec::as_slice);
+            let tracks: Vec<usize> = ids.iter().filter_map(|id| index.get(id).copied()).collect();
+            Playlist {
+                missing: ids.len() - tracks.len(),
+                tracks,
+                id: p.id,
+                parent: p.parent,
+                name: p.name.nfc().collect(),
+                folder: p.folder,
+                sort: p.sort,
+            }
         })
         .collect();
     playlists.sort_by_key(|p| (p.parent, p.sort, p.name.to_lowercase()));

@@ -84,6 +84,8 @@ fn playlists_under(lib: &Library, s: usize, parent: u32) -> impl Iterator<Item =
     lib.playlists.iter().filter(move |p| p.parent == parent).map(move |p| {
         let detail = if p.folder {
             plural(lib.playlists.iter().filter(|c| c.parent == p.id).count(), "list")
+        } else if p.missing > 0 {
+            format!("{} · {} missing", plural(p.tracks.len(), "track"), p.missing)
         } else {
             plural(p.tracks.len(), "track")
         };
@@ -93,6 +95,19 @@ fn playlists_under(lib: &Library, s: usize, parent: u32) -> impl Iterator<Item =
 
 fn plural(n: usize, what: &str) -> String {
     if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") }
+}
+
+/// What isn't shown at `node`: tracks the library lists whose audio isn't
+/// there (not copied to the stick, moved, or streaming-only).
+#[must_use]
+pub fn missing(libs: &[Library], node: Node) -> usize {
+    match node {
+        Node::Source(s) | Node::All(s) => libs.get(s).map_or(0, |l| l.missing),
+        Node::Playlist(s, id) => {
+            libs.get(s).and_then(|l| l.playlists.iter().find(|p| p.id == id)).map_or(0, |p| p.missing)
+        }
+        Node::Sources | Node::Track(..) => 0,
+    }
 }
 
 /// A stable id for a track, to mark the one that's loaded.
