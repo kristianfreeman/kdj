@@ -72,7 +72,9 @@ Ethernet.
   alignment with it instead of being undone, and a loop that isn't whole
   beats follows the tempo only. Turning SYNC off keeps the synced tempo.
 
-The header shows SYNC / MASTER and the number of Link peers. Builds need
+With `--no-link` (or a build without Link), SYNC and MASTER still work
+between the decks of one `--decks 2` process, on a session of their own.
+The header shows SYNC / MASTER and, on Link, the number of peers. Builds need
 cmake and libclang for Link; build without it with `--no-default-features`.
 
 ## MIDI controllers

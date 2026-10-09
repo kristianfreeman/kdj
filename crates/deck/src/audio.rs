@@ -25,6 +25,19 @@ pub trait BlockHook: Send {
     fn after(&mut self, frames: u64);
 }
 
+/// SYNC and MASTER between the decks in this process, without a network.
+pub struct LocalHook(pub deck_engine::session::LocalSession);
+
+impl BlockHook for LocalHook {
+    fn before(&mut self, engines: &mut [Engine], _latency_us: i64) {
+        deck_engine::session::drive(engines, &mut self.0, None);
+    }
+
+    fn after(&mut self, frames: u64) {
+        self.0.advance(frames);
+    }
+}
+
 /// One callback's cost, sent to the UI for the perf overlay.
 #[derive(Clone, Copy)]
 pub struct CallbackStat {

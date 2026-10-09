@@ -9,7 +9,8 @@
 use std::sync::Arc;
 
 use deck_engine::Engine;
-use deck_engine::sync::{MASTER_DRIFT_BEATS, QUANTUM, Timeline, phase_error};
+use deck_engine::session::{self, Session};
+use deck_engine::sync::QUANTUM;
 use rusty_link::{AblLink, SessionState};
 
 pub struct LinkDriver {
@@ -29,44 +30,37 @@ impl LinkDriver {
     /// `latency_us` is how long until this block is heard.
     fn sync_decks(&mut self, engines: &mut [Engine], latency_us: i64) {
         let host = self.clock.host_time(self.sample_clock, self.link.clock_micros());
-        let heard = host + latency_us;
         self.link.capture_audio_session_state(&mut self.state);
-        if lead(engines, &mut self.state, heard) {
+        let peers = Some(u32::try_from(self.link.num_peers()).unwrap_or(u32::MAX));
+        let mut at = LinkAt { state: &mut self.state, heard: host + latency_us };
+        if session::drive(engines, &mut at, peers) {
             self.link.commit_audio_session_state(&self.state);
-        }
-        let peers = u32::try_from(self.link.num_peers()).unwrap_or(u32::MAX);
-        let timeline = Timeline { bpm: self.state.tempo(), beat: self.state.beat_at_time(heard, QUANTUM), peers };
-        for e in engines.iter_mut() {
-            e.set_timeline(Some(timeline));
         }
     }
 }
 
-/// Let the deck on MASTER set the session's tempo, and its phase when it
-/// takes over or drifts. MASTER is one deck at a time: a deck taking it
-/// hands the others back to SYNC. Returns whether the session changed.
-fn lead(engines: &mut [Engine], state: &mut SessionState, heard: i64) -> bool {
-    let taking = engines.iter_mut().position(|e| e.lead().is_some_and(|l| l.align));
-    let mut changed = false;
-    for i in 0..engines.len() {
-        let Some(e) = engines.get_mut(i) else { break };
-        if taking.is_some_and(|t| t != i) {
-            e.yield_master();
-            continue;
-        }
-        let Some(l) = e.lead() else { continue };
-        if (state.tempo() - l.bpm).abs() > 1e-4 {
-            state.set_tempo(l.bpm, heard);
-            changed = true;
-        }
-        let Some(beat) = l.beat else { continue };
-        let drift = phase_error(state.beat_at_time(heard, QUANTUM), beat);
-        if taking == Some(i) || drift.abs() > MASTER_DRIFT_BEATS {
-            state.force_beat_at_time(beat, heard, QUANTUM);
-            changed = true;
-        }
+/// Link's session state, seen from the moment a block is heard.
+struct LinkAt<'a> {
+    state: &'a mut SessionState,
+    heard: i64,
+}
+
+impl Session for LinkAt<'_> {
+    fn tempo(&self) -> f64 {
+        self.state.tempo()
     }
-    changed
+
+    fn set_tempo(&mut self, bpm: f64) {
+        self.state.set_tempo(bpm, self.heard);
+    }
+
+    fn beat(&self) -> f64 {
+        self.state.beat_at_time(self.heard, QUANTUM)
+    }
+
+    fn force_beat(&mut self, beat: f64) {
+        self.state.force_beat_at_time(beat, self.heard, QUANTUM);
+    }
 }
 
 impl crate::audio::BlockHook for LinkDriver {

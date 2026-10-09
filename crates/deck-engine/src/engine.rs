@@ -142,9 +142,10 @@ pub struct Snapshot {
     pub sync: SyncMode,
     /// Phase error against the shared timeline, in beats, while following.
     pub sync_error: f64,
-    /// The shared timeline's tempo and peer count, if there is one.
+    /// The shared timeline's tempo, if there is one.
     pub link_bpm: Option<f64>,
-    pub link_peers: u32,
+    /// Ableton Link peers; None without Link (a local session, or none).
+    pub link_peers: Option<u32>,
 }
 
 impl Snapshot {
@@ -960,7 +961,7 @@ impl Engine {
             sync: self.link.mode,
             sync_error: self.link.error,
             link_bpm: self.link.timeline.map(|t| t.bpm),
-            link_peers: self.link.timeline.map_or(0, |t| t.peers),
+            link_peers: self.link.timeline.and_then(|t| t.peers),
         }
     }
 }
@@ -992,7 +993,7 @@ impl Snapshot {
             sync: SyncMode::Off,
             sync_error: 0.0,
             link_bpm: None,
-            link_peers: 0,
+            link_peers: None,
         }
     }
 }

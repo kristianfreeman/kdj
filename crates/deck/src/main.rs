@@ -35,6 +35,7 @@ use anyhow::{Result, anyhow};
 use deck_engine::analysis::{self, synth::SynthSpec};
 use deck_engine::keymap::{Keymap, Layer};
 use deck_engine::midimap::MidiMap;
+use deck_engine::session::LocalSession;
 use deck_engine::{Action, Edge, Engine, EngineConfig, EngineHandle, InputSender, Snapshot, Track};
 use deck_library::nav::{self, Node};
 use deck_library::{anlz, library};
@@ -408,7 +409,7 @@ fn run() -> Result<()> {
         midi_inputs.extend(inputs);
     }
     eprintln!("audio: {} at {} Hz, asked for {} frames, {} deck(s)", output.name, sample_rate, args.buffer, args.decks);
-    let mut audio = output.start(engines, link_hook(&args, sample_rate))?;
+    let mut audio = output.start(engines, Some(sync_hook(&args, sample_rate)))?;
 
     let (load_tx, load_rx) = mpsc::channel::<Loaded>();
     let (scan_tx, scan_rx) = mpsc::channel();
@@ -516,22 +517,20 @@ impl AudioWatch {
     }
 }
 
-/// Join Ableton Link sessions on the network, unless told not to.
-#[cfg(feature = "link")]
-fn link_hook(args: &Args, sample_rate: u32) -> Option<Box<dyn audio::BlockHook>> {
-    if args.no_link {
-        return None;
+/// What SYNC and MASTER share: the Ableton Link session on the network, or
+/// with `--no-link` (or no Link in the build) a session local to this process.
+fn sync_hook(args: &Args, sample_rate: u32) -> Box<dyn audio::BlockHook> {
+    #[cfg(feature = "link")]
+    if !args.no_link {
+        let link = Arc::new(rusty_link::AblLink::new(120.0));
+        link.set_num_peers_callback(|n| eprintln!("link: {n} peer(s) in the session"));
+        link.enable(true);
+        eprintln!("link: joined the session on the local network");
+        return Box::new(link::LinkDriver::new(link, sample_rate));
     }
-    let link = Arc::new(rusty_link::AblLink::new(120.0));
-    link.set_num_peers_callback(|n| eprintln!("link: {n} peer(s) in the session"));
-    link.enable(true);
-    eprintln!("link: joined the session on the local network");
-    Some(Box::new(link::LinkDriver::new(link, sample_rate)))
-}
-
-#[cfg(not(feature = "link"))]
-fn link_hook(_: &Args, _: u32) -> Option<Box<dyn audio::BlockHook>> {
-    None
+    #[cfg(not(feature = "link"))]
+    let _ = args;
+    Box::new(audio::LocalHook(LocalSession::new(120.0, sample_rate)))
 }
 
 /// Start loading whatever the command line asked for; returns the status

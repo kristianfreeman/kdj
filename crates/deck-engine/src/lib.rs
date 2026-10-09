@@ -8,6 +8,7 @@ pub mod grid;
 pub mod keymap;
 pub mod midimap;
 pub mod nudge;
+pub mod session;
 pub mod source;
 pub mod stretch;
 pub mod sync;

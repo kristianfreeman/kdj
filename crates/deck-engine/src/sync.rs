@@ -34,8 +34,9 @@ pub struct Timeline {
     pub bpm: f64,
     /// Beat number on the shared timeline when this block reaches the speakers.
     pub beat: f64,
-    /// Other Link participants (not counting this app).
-    pub peers: u32,
+    /// Other Link participants (not counting this app); None for a session
+    /// local to this process.
+    pub peers: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -108,7 +109,7 @@ mod tests {
     use super::*;
 
     fn tl(bpm: f64, beat: f64) -> Timeline {
-        Timeline { bpm, beat, peers: 1 }
+        Timeline { bpm, beat, peers: Some(1) }
     }
 
     #[test]

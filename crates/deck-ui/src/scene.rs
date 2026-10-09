@@ -153,8 +153,8 @@ impl Scene {
         let text = &mut self.text;
         text.clear();
         text.push_str(if t.rekordbox_grid { "RB grid" } else { "auto grid" });
-        if s.link_bpm.is_some() {
-            let _ = write!(text, " · Link {}", s.link_peers);
+        if let Some(peers) = s.link_peers {
+            let _ = write!(text, " · Link {peers}");
         }
         let src_w = atlas.draw(f, Style::Label, x, 27.0, Align::Right, text, DIM);
         atlas.draw_clipped(f, Style::Body, title_x, 27.0, x - src_w - 16.0 - title_x, t.title, FG);
