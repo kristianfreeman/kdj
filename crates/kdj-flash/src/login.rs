@@ -108,7 +108,7 @@ impl Setup {
     /// If the files can't be written.
     pub fn write(&self, boot: &Path) -> Result<()> {
         let id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let meta = format!("{MARK}.\ndsmode: local\ninstance_id: deck-{id}\n");
+        let meta = format!("{MARK}.\ndsmode: local\ninstance_id: kdj-{id}\n");
         std::fs::write(boot.join("user-data"), self.user_data()).context("writing user-data")?;
         std::fs::write(boot.join("meta-data"), meta).context("writing meta-data")?;
         // Raspberry Pi OS's sshswitch turns SSH on when this exists, then removes it.
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(found(&dir), Found::KdjFlash("kristian".into()));
         assert!(dir.join("ssh").is_file());
         let meta = std::fs::read_to_string(dir.join("meta-data")).expect("meta");
-        assert!(meta.contains("dsmode: local") && meta.contains("instance_id: deck-"));
+        assert!(meta.contains("dsmode: local") && meta.contains("instance_id: kdj-"));
         std::fs::remove_dir_all(&dir).expect("clean up");
     }
 }
