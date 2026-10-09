@@ -1,5 +1,6 @@
 //! Beat-grid detection against synthetic tracks with known ground truth.
 
+use anyhow::Result;
 use deck_engine::analysis::{self, synth::SynthSpec};
 
 const SR: u32 = 48_000;
@@ -57,4 +58,37 @@ fn first_kick_after_an_intro_is_bar_one() {
     assert!(off_ms.abs() < 3.0, "first kick {off_ms:.2} ms off the grid");
     assert_eq!(g.bar_beat(g.frame_of(kick_beat.round()) + 1.0), (9, 1), "first kick after 8 intro bars is bar 9");
     assert!(g.anchor / f64::from(SR) <= spec.lead_in + 0.003, "bar 1 is at the start of the music");
+}
+
+/// A 16-bit mono WAV of `frames` frames of silence.
+fn silent_wav(path: &std::path::Path, frames: u32, rate: u32) -> std::io::Result<()> {
+    let data = frames * 2;
+    let mut b = Vec::with_capacity(44 + data as usize);
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + data).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    b.extend_from_slice(&1u16.to_le_bytes()); // mono
+    b.extend_from_slice(&rate.to_le_bytes());
+    b.extend_from_slice(&(rate * 2).to_le_bytes());
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&16u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&data.to_le_bytes());
+    b.resize(44 + data as usize, 0);
+    std::fs::write(path, b)
+}
+
+#[test]
+fn a_track_too_long_for_memory_is_refused_not_loaded() -> Result<()> {
+    let path = std::env::temp_dir().join(format!("deck-too-long-{}.wav", std::process::id()));
+    silent_wav(&path, 96_000, 48_000)?;
+    let refused = analysis::decode::decode(&path, Some(48_000));
+    let fits = analysis::decode::decode(&path, Some(96_000));
+    std::fs::remove_file(&path)?;
+    let err = refused.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("too long"), "refused with {err:?}");
+    assert_eq!(fits?.samples.len(), 96_000 * 2, "mono comes out as stereo");
+    Ok(())
 }

@@ -29,13 +29,14 @@ impl std::fmt::Debug for Decoded {
     }
 }
 
-/// Decode the default audio track of the file at `path`.
+/// Decode the default audio track of the file at `path`, refusing it if it
+/// runs past `max_frames` (what fits in memory; see `analysis::frame_budget`).
 ///
 /// # Errors
 ///
 /// If the file can't be opened, isn't a format Symphonia knows, has no audio
-/// track, or yields no audio at all.
-pub fn decode(path: &Path) -> Result<Decoded> {
+/// track, yields no audio at all, or is too long.
+pub fn decode(path: &Path, max_frames: Option<usize>) -> Result<Decoded> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
     let mut hint = Hint::new();
@@ -48,10 +49,22 @@ pub fn decode(path: &Path) -> Result<Decoded> {
     let track = format.default_track(TrackType::Audio).ok_or_else(|| anyhow!("no audio track"))?;
     let track_id = track.id;
     let trimmed_delay = track.delay;
+    let max = max_frames.unwrap_or(usize::MAX);
+    let rate = track.codec_params.as_ref().and_then(|p| p.audio()).and_then(|a| a.sample_rate).unwrap_or(44_100);
+    let too_long = move || {
+        #[expect(clippy::cast_precision_loss, reason = "a frame count, shown in whole minutes")]
+        let minutes = max as f64 / f64::from(rate) / 60.0;
+        anyhow!("too long: about {minutes:.0} minutes of audio fit in free memory")
+    };
+    // Size the buffer once when the length is known, instead of doubling.
+    let expected = track.num_frames.and_then(|n| usize::try_from(n).ok());
+    if expected.is_some_and(|n| n > max) {
+        return Err(too_long());
+    }
+    let mut samples = Vec::with_capacity(expected.unwrap_or(0).saturating_mul(2));
     let params = track.codec_params.as_ref().and_then(|p| p.audio()).ok_or_else(|| anyhow!("not audio"))?;
     let mut decoder = symphonia::default::get_codecs().make_audio_decoder(params, &AudioDecoderOptions::default())?;
 
-    let mut samples = Vec::new();
     let mut packet_buf = Vec::new();
     let mut sample_rate = 0;
     while let Some(packet) = format.next_packet()? {
@@ -72,6 +85,9 @@ pub fn decode(path: &Path) -> Result<Decoded> {
             let l = frame[0];
             let r = if channels > 1 { frame[1] } else { l };
             samples.extend_from_slice(&[l, r]);
+        }
+        if samples.len() / 2 > max {
+            return Err(too_long());
         }
     }
     if samples.is_empty() {

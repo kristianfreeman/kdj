@@ -68,25 +68,31 @@ pub fn load_file(path: &Path, sample_rate: u32) -> Result<(Track, LoadTimings)> 
 /// If the beat-grid thread panics; the panic is passed on.
 pub fn load_file_known(path: &Path, sample_rate: u32, known: Known) -> Result<(Track, LoadTimings)> {
     let t = Instant::now();
-    let decoded = decode::decode(path)?;
+    let decoded = decode::decode(path, frame_budget())?;
     let mut timings = LoadTimings { decode: t.elapsed(), ..Default::default() };
     let src_rate = decoded.sample_rate;
+    // The grid runs on mono at the file's rate; the stereo samples move on
+    // to resampling without a copy.
+    let mono_src = known.grid.is_none().then(|| mono(&decoded.samples));
 
     let grid_source = if known.grid.is_some() { GridSource::Rekordbox } else { GridSource::Detected };
     let (grid, samples, waveform) = std::thread::scope(|s| -> Result<_> {
         let grid = s.spawn(|| {
-            if let Some(g) = known.grid {
-                return (g, Duration::ZERO);
-            }
+            let (Some(m), None) = (&mono_src, known.grid) else {
+                return (
+                    known.grid.unwrap_or_else(|| crate::grid::BeatGrid::new(120.0, 0.0, sample_rate)),
+                    Duration::ZERO,
+                );
+            };
             let t = Instant::now();
-            let g = grid::detect(&mono(&decoded.samples), src_rate, grid::GridConfig::default());
+            let g = grid::detect(m, src_rate, grid::GridConfig::default());
             // Same beats, counted in frames at the deck's rate.
             let g =
                 crate::grid::BeatGrid::new(g.bpm, g.anchor * f64::from(sample_rate) / f64::from(src_rate), sample_rate);
             (g, t.elapsed())
         });
         let t = Instant::now();
-        let samples = resample::resample(decoded.samples.clone(), src_rate, sample_rate)?;
+        let samples = resample::resample(decoded.samples, src_rate, sample_rate)?;
         timings.resample = t.elapsed();
         let t = Instant::now();
         let waveform = known.waveform.unwrap_or_else(|| waveform::analyze(&samples, sample_rate));
@@ -109,6 +115,39 @@ pub fn load_file_known(path: &Path, sample_rate: u32, known: Known) -> Result<(T
         waveform,
     };
     Ok((track, timings))
+}
+
+/// Bytes of memory a load needs per source frame at its peak: the decoded
+/// stereo (8), the grid's mono copy (4), the resampled stereo (8, a little
+/// more when upsampling), the waveform and slack.
+#[cfg(any(target_os = "linux", test))]
+const LOAD_BYTES_PER_FRAME: u64 = 24;
+/// Memory left for everything else while a track loads.
+#[cfg(any(target_os = "linux", test))]
+const LOAD_HEADROOM_BYTES: u64 = 256 << 20;
+
+/// How many frames of audio a load can take without running out of memory:
+/// on Linux (the Pi, where memory is locked and can't swap), from what's
+/// available now; elsewhere unlimited.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn frame_budget() -> Option<usize> {
+    budget_from_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub const fn frame_budget() -> Option<usize> {
+    None
+}
+
+#[cfg(any(target_os = "linux", test))]
+/// The frame budget from `/proc/meminfo`'s text.
+fn budget_from_meminfo(info: &str) -> Option<usize> {
+    let kb: u64 =
+        info.lines().find_map(|l| l.strip_prefix("MemAvailable:"))?.trim().strip_suffix("kB")?.trim().parse().ok()?;
+    let bytes = kb.saturating_mul(1024).saturating_sub(LOAD_HEADROOM_BYTES);
+    usize::try_from(bytes / LOAD_BYTES_PER_FRAME).ok()
 }
 
 /// Interleaved stereo → mono, for the beat grid.
@@ -153,4 +192,15 @@ pub fn build(title: String, samples: Vec<f32>, sample_rate: u32) -> (Track, Load
         waveform,
     };
     (track, timings)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_frame_budget_comes_from_available_memory() {
+        let info = "MemTotal:        3884488 kB\nMemFree:          212345 kB\nMemAvailable:    1310720 kB\n";
+        // 1.25 GiB available, 256 MiB kept back, 24 bytes a frame.
+        assert_eq!(super::budget_from_meminfo(info), Some(((1_310_720 << 10) - (256 << 20)) / 24));
+        assert_eq!(super::budget_from_meminfo("MemTotal: 1 kB\n"), None);
+    }
 }

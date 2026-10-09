@@ -152,7 +152,7 @@ pub fn probe(sample_rate: u32) -> Result<bool> {
         let name = t.audio.file_stem().unwrap_or_default().to_string_lossy();
         let rb = attack_ms(&env, &t.rb, track.frames(), sample_rate);
         let ours = attack_ms(&env, &track.grid, track.frames(), sample_rate);
-        let d = analysis::decode::decode(&t.audio)?;
+        let d = analysis::decode::decode(&t.audio, None)?;
         let delay = d
             .trimmed_delay
             .map_or_else(|| "none".into(), |f| format!("{:.1} ms", f64::from(f) / f64::from(d.sample_rate) * 1000.0));
