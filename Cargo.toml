@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/deck-engine", "crates/deck-ui", "crates/deck", "crates/deck-sim", "crates/deck-library"]
+members = ["crates/deck-engine", "crates/deck-ui", "crates/deck", "crates/deck-sim", "crates/deck-library", "crates/deck-flash"]
 
 [workspace.package]
 edition = "2024"

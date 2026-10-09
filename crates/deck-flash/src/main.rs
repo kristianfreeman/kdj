@@ -1,0 +1,385 @@
+//! deck-flash: put the deck on an SD card, and see what's on one.
+//!
+//!   deck-flash                 overview: the image here, the cards plugged in
+//!   deck-flash list            removable disks and what's on them
+//!   deck-flash status [DISK]   one card in detail
+//!   deck-flash flash [IMAGE]   write the deck image to a card, then verify
+//!   deck-flash format [DISK]   erase a card to one FAT32 partition
+//!
+//! Only ever touches removable, external disks; shows what's on one and
+//! asks you to type its name before erasing it. macOS and Linux.
+
+mod disk;
+mod image;
+mod inspect;
+mod ui;
+mod write;
+
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::time::Instant;
+
+use anyhow::{Context, Result, bail};
+use clap::{Parser, Subcommand};
+use console::style;
+
+use crate::disk::Disk;
+use crate::image::Image;
+use crate::inspect::{Booted, Contents};
+
+#[derive(Debug, Parser)]
+#[command(version, about = "Put the deck on an SD card, and see what's on one", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Cmd>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Cmd {
+    /// Removable disks and what's on them
+    List,
+    /// One card in detail: partitions, what's on it, which build
+    Status {
+        /// The disk (disk4, sdb…); the only card if there's one
+        disk: Option<String>,
+    },
+    /// Write the deck image to a card and verify it
+    Flash {
+        /// The image; the newest target/image/deck-*.img.xz if omitted
+        image: Option<PathBuf>,
+        /// The disk to write (disk4, sdb…); asks if there's more than one card
+        #[arg(long)]
+        disk: Option<String>,
+        /// Don't ask for confirmation
+        #[arg(short, long)]
+        yes: bool,
+        /// Skip reading the card back afterwards
+        #[arg(long)]
+        no_verify: bool,
+        /// Write to this file instead of a disk (for testing)
+        #[arg(long, hide = true)]
+        to: Option<PathBuf>,
+        /// The image's checksum was already checked (set when re-run with sudo)
+        #[arg(long, hide = true)]
+        checked: bool,
+    },
+    /// Erase a card to one FAT32 partition (not needed before flashing)
+    Format {
+        /// The disk (disk4, sdb…); asks if there's more than one card
+        disk: Option<String>,
+        /// The new volume's name
+        #[arg(long, default_value = "SDCARD")]
+        name: String,
+        /// Don't ask for confirmation
+        #[arg(short, long)]
+        yes: bool,
+    },
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    let result = match cli.command {
+        None => overview(),
+        Some(Cmd::List) => list(),
+        Some(Cmd::Status { disk }) => status(disk.as_deref()),
+        Some(Cmd::Flash { image, disk, yes, no_verify, to, checked }) => {
+            flash(&FlashArgs { image, disk, yes, verify: !no_verify, to, checked })
+        }
+        Some(Cmd::Format { disk, name, yes }) => format(disk.as_deref(), &name, yes),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("\n  {} {e:#}", ui::danger().apply_to("✗"));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// No command: the image here, every card, and what to do next.
+fn overview() -> Result<()> {
+    let local = local_image();
+    ui::heading("Image");
+    match &local {
+        Some(img) => describe_image(img),
+        None => ui::warn("No deck image here yet: build one with `make image`"),
+    }
+    let disks = disk::list()?;
+    ui::heading("Cards");
+    if disks.is_empty() {
+        ui::info("No SD card or USB drive found. Insert one and run this again.");
+        return Ok(());
+    }
+    for d in &disks {
+        describe_disk(d, local.as_ref(), false);
+    }
+    let usable: Vec<&Disk> = disks.iter().filter(|d| d.refusal().is_none()).collect();
+    ui::heading("Next");
+    match (usable.as_slice(), &local) {
+        ([], _) => ui::info("None of these can be written."),
+        ([d], Some(_)) => {
+            ui::step(&format!("deck-flash flash          put the deck on {} ({})", d.id, ui::size(d.size)));
+            ui::step(&format!("deck-flash status {:<8} look closer", d.id));
+        }
+        (_, Some(_)) => ui::step("deck-flash flash --disk DISK   put the deck on one of these"),
+        (_, None) => ui::step("make image, then deck-flash flash"),
+    }
+    Ok(())
+}
+
+fn list() -> Result<()> {
+    let disks = disk::list()?;
+    if disks.is_empty() {
+        ui::info("No SD card or USB drive found.");
+    }
+    let local = local_image();
+    for d in &disks {
+        describe_disk(d, local.as_ref(), false);
+    }
+    Ok(())
+}
+
+fn status(id: Option<&str>) -> Result<()> {
+    let d = pick(id, false)?;
+    describe_disk(&d, local_image().as_ref(), true);
+    Ok(())
+}
+
+#[derive(Debug)]
+struct FlashArgs {
+    image: Option<PathBuf>,
+    disk: Option<String>,
+    yes: bool,
+    verify: bool,
+    to: Option<PathBuf>,
+    checked: bool,
+}
+
+fn flash(a: &FlashArgs) -> Result<()> {
+    let path = match &a.image {
+        Some(p) => p.clone(),
+        None => image::newest().context("no deck image found: build one with `make image`, or give its path")?,
+    };
+    let img = Image::open(&path)?;
+    // The card first: refuse a wrong one before spending time on the image.
+    let d = if a.to.is_some() { None } else { Some(pick(a.disk.as_deref(), true)?) };
+    ui::heading("Image");
+    describe_image(&img);
+    if !a.checked {
+        img.verify()?;
+        ui::ok("Checksum matches");
+    }
+
+    // Writing to a file: the same pipeline, no disk involved.
+    let (Some(d), None) = (d, &a.to) else {
+        return a.to.as_ref().map_or(Ok(()), |to| write_and_verify(&img, to, a.verify).map(drop));
+    };
+    ui::heading("Card");
+    describe_disk(&d, Some(&img), false);
+    if !a.yes {
+        confirm(&d, &format!("Write {} to it", img.name))?;
+    }
+    if !is_root() {
+        return again_with_sudo(
+            &[
+                "flash".as_ref(),
+                img.path.canonicalize()?.as_os_str(),
+                "--disk".as_ref(),
+                d.id.as_ref(),
+                "--yes".as_ref(),
+                "--checked".as_ref(),
+            ],
+            a.verify,
+        );
+    }
+    ui::heading("Writing");
+    disk::unmount(&d).context("unmounting the card (close anything using it)")?;
+    ui::ok(&format!("Unmounted {}", d.id));
+    let started = Instant::now();
+    write_and_verify(&img, &d.raw, a.verify)?;
+    disk::eject(&d);
+    ui::ok(&format!("Done in {:.0} s. Ejected: safe to take the card out.", started.elapsed().as_secs_f64()));
+    ui::heading("Next");
+    ui::step("Put the card in the Pi (DAC hat on) and power it on.");
+    ui::hint("First boot grows the card and restarts once, then the deck comes up full screen.");
+    ui::hint("No login is set up: plug a keyboard in for first boot, or flash with Raspberry Pi");
+    ui::hint("Imager (Use custom → this image) to set a user, SSH and Wi-Fi.");
+    Ok(())
+}
+
+fn write_and_verify(img: &Image, target: &Path, verify: bool) -> Result<(u64, String)> {
+    let (len, hash) = write::write(img, target)?;
+    ui::ok(&format!("Wrote {} to {}", ui::size(len), target.display()));
+    if verify {
+        write::verify(target, len, &hash)?;
+        ui::ok("Read back: the card matches the image");
+    }
+    Ok((len, hash))
+}
+
+fn format(id: Option<&str>, name: &str, yes: bool) -> Result<()> {
+    if name.is_empty() || name.len() > 11 || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        bail!("a FAT32 name is 1–11 letters, digits or _");
+    }
+    let d = pick(id, true)?;
+    describe_disk(&d, local_image().as_ref(), false);
+    if !yes {
+        confirm(&d, &format!("Erase it to one FAT32 volume called {name}"))?;
+    }
+    if cfg!(target_os = "linux") && !is_root() {
+        return again_with_sudo(
+            &["format".as_ref(), d.id.as_ref(), "--name".as_ref(), name.as_ref(), "--yes".as_ref()],
+            true,
+        );
+    }
+    disk::unmount(&d).context("unmounting the card")?;
+    disk::format(&d, &name.to_ascii_uppercase())?;
+    ui::ok(&format!("{} is now one FAT32 volume, {}", d.id, name.to_ascii_uppercase()));
+    Ok(())
+}
+
+/// The disk to work on: the one named, or the only card, or a choice.
+/// With `writable`, refuses disks we won't write.
+fn pick(id: Option<&str>, writable: bool) -> Result<Disk> {
+    if let Some(id) = id {
+        let d = disk::find(id)?;
+        if let (true, Some(why)) = (writable, d.refusal()) {
+            bail!("won't write to {}: {why}", d.id);
+        }
+        return Ok(d);
+    }
+    // Only cards are picked for you; name a disk to see any other.
+    let disks: Vec<Disk> = disk::list()?.into_iter().filter(|d| d.refusal().is_none()).collect();
+    match disks.len() {
+        0 => bail!("no SD card found: insert one (or name a disk: deck-flash status disk4)"),
+        1 => Ok(disks.into_iter().next().context("one disk")?),
+        _ if !console::user_attended() => {
+            bail!(
+                "{} cards: name one ({})",
+                disks.len(),
+                disks.iter().map(|d| d.id.as_str()).collect::<Vec<_>>().join(", ")
+            )
+        }
+        _ => {
+            let items: Vec<String> =
+                disks.iter().map(|d| format!("{}  {}  {}", d.id, ui::size(d.size), d.model)).collect();
+            let i = dialoguer::Select::new().with_prompt("Which card?").items(&items).default(0).interact()?;
+            disks.into_iter().nth(i).context("no such disk")
+        }
+    }
+}
+
+/// Make them type the disk's name: erasing the wrong disk is the one
+/// mistake this tool exists to prevent.
+fn confirm(d: &Disk, what: &str) -> Result<()> {
+    if !console::user_attended() {
+        bail!("not asking without a terminal: add --yes if you're sure");
+    }
+    println!(
+        "\n  {} {what}: {} on {} ({}, {}).",
+        ui::danger().apply_to("This erases everything"),
+        ui::danger().apply_to("everything"),
+        style(&d.id).bold(),
+        ui::size(d.size),
+        if d.model.is_empty() { "disk" } else { &d.model },
+    );
+    let typed: String = dialoguer::Input::new()
+        .with_prompt(format!("  Type {} to go ahead", style(&d.id).bold()))
+        .allow_empty(true)
+        .interact_text()?;
+    if typed.trim() != d.id {
+        bail!("cancelled: nothing was changed");
+    }
+    Ok(())
+}
+
+fn is_root() -> bool {
+    // SAFETY: geteuid has no preconditions and can't fail.
+    unsafe { libc::geteuid() == 0 }
+}
+
+/// Run this same tool again under sudo for the part that needs it, after the
+/// questions have been asked.
+fn again_with_sudo(args: &[&std::ffi::OsStr], verify: bool) -> Result<()> {
+    ui::info("Writing to a disk needs admin rights: sudo will ask for your password.");
+    let exe = std::env::current_exe()?;
+    let mut cmd = std::process::Command::new("sudo");
+    cmd.arg(exe).args(args);
+    if !verify {
+        cmd.arg("--no-verify");
+    }
+    let status = cmd.status().context("running sudo")?;
+    if !status.success() {
+        bail!("stopped ({status})");
+    }
+    Ok(())
+}
+
+fn local_image() -> Option<Image> {
+    image::newest().and_then(|p| Image::open(&p).ok())
+}
+
+fn describe_image(img: &Image) {
+    println!("  {} {}", style("●").cyan(), style(&img.name).bold());
+    ui::field("file", &format!("{} ({})", img.path.display(), ui::size(img.compressed)));
+    if let Some(n) = img.size() {
+        ui::field("on the card", &ui::size(n));
+    }
+    for key in ["built", "deck", "commit", "base"] {
+        if let Some(v) = img.info.get(key) {
+            ui::field(key, v);
+        }
+    }
+}
+
+fn describe_disk(d: &Disk, local: Option<&Image>, detail: bool) {
+    let bus = if d.bus.is_empty() { String::new() } else { format!(" · {}", d.bus) };
+    let model = if d.model.is_empty() { "disk" } else { &d.model };
+    let dot = if d.refusal().is_some() { style("●").dim() } else { style("●").green() };
+    println!("  {dot} {}  {}  {}{}", style(&d.id).bold(), ui::size(d.size), model, style(bus).dim());
+    if let Some(why) = d.refusal() {
+        ui::hint(&format!("Won't write to it: {why}."));
+        if !detail {
+            return;
+        }
+    }
+    if detail || d.partitions.len() <= 4 {
+        for p in &d.partitions {
+            let label = if p.label.is_empty() { String::new() } else { format!(" \"{}\"", p.label) };
+            let mount = p.mount.as_ref().map(|m| format!(" at {}", m.display())).unwrap_or_default();
+            ui::hint(&format!("{:<10} {:>8}  {}{label}{mount}", p.id, ui::size(p.size), p.kind));
+        }
+    }
+    match inspect::inspect(d) {
+        Contents::Empty => ui::info("Blank: no partitions."),
+        Contents::Other => ui::info("Something else (not the deck, not Raspberry Pi OS)."),
+        Contents::Unreadable => ui::warn("Couldn't look inside its boot partition."),
+        Contents::RaspberryPiOs { release, booted } => {
+            ui::info(&format!("Raspberry Pi OS, without the deck: {release}"));
+            booted_line(booted);
+        }
+        Contents::Deck { info, booted } => {
+            let name = info.get("image").map_or("the deck", String::as_str);
+            ui::ok(&format!("The deck: {}", style(name).bold()));
+            if detail {
+                for key in ["built", "deck", "commit", "base"] {
+                    if let Some(v) = info.get(key) {
+                        ui::field(key, v);
+                    }
+                }
+            }
+            if let Some(cmp) = inspect::compare(&info, local) {
+                if cmp.starts_with("the same") { ui::ok(&cmp) } else { ui::warn(&cmp) }
+            }
+            booted_line(booted);
+        }
+    }
+}
+
+fn booted_line(b: Booted) {
+    match b {
+        Booted::Yes => ui::info("Has booted on a Pi (its storage has been grown to fill the card)."),
+        Booted::No => ui::info("Not booted yet."),
+        Booted::Unknown => {}
+    }
+}

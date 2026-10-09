@@ -176,6 +176,7 @@ Docker, with the packages the Pi setup installs. The toolchain is pinned in
 - `crates/deck-ui`: the 800×480 screen in OpenGL (3.3 core / ES 3.0).
 - `crates/deck`: the app: SDL2 window, cpal audio, keyboard, touch, MIDI, Ableton Link.
 - `crates/deck-sim`: virtual audio clock, scenarios, perf budgets, PNG frames.
+- `crates/deck-flash`: SD cards: what's on them, and writing the deck's image to one.
 - `deploy/pi`: Raspberry Pi setup: build, boot-to-deck service, USB mounting, boot config.
 
 ## Licence

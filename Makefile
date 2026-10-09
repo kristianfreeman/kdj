@@ -1,5 +1,5 @@
 # One place for the checks. `make check` before pushing; `make full` rarely.
-.PHONY: check lint fmt test test-full perf scenarios full linux image
+.PHONY: check lint fmt test test-full perf scenarios full linux image card flash
 
 check: lint test scenarios
 
@@ -30,6 +30,13 @@ perf:
 # Lint, test and build on Linux arm64 (the Pi) in Docker.
 linux:
 	tools/linux-check.sh
+
+# SD cards: what's plugged in and on them; write the newest image to one.
+card:
+	cargo run -q --release -p deck-flash
+
+flash:
+	cargo run -q --release -p deck-flash -- flash
 
 # Raspberry Pi 4 SD card image with the deck preinstalled, in Docker
 # (target/image/deck-rpi4-<date>.img.xz; see deploy/pi/README.md).

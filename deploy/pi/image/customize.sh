@@ -78,8 +78,20 @@ prepare() {
     detach
 }
 
+# What this build is, as key=value lines (deck-image.txt on the card, and
+# the .info file next to the image, which adds the uncompressed size).
+info() {
+    echo "# The deck's SD card image (deploy/pi/image). deck-flash status reads this."
+    echo "image=$name"
+    echo "built=$built"
+    echo "deck=${DECK_VERSION:-unknown}"
+    echo "commit=${DECK_COMMIT:-unknown}"
+    echo "base=${DECK_BASE:-unknown}"
+}
+
 build() {
     local name=$1 grow=${DECK_IMAGE_GROW:-1536M}
+    built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     tools
     [ -f "$img" ] || { echo "run prepare first" >&2; exit 1; }
     [ -x /out/build/deck ] || { echo "no /out/build/deck" >&2; exit 1; }
@@ -122,6 +134,9 @@ build() {
 
     rm -rf "$stage" "$root/usr/sbin/policy-rc.d"
     cp -a /tmp/resolv.conf.image "$root/etc/resolv.conf"
+    # Which build this is, on the boot partition (readable from any
+    # computer), for deck-flash status.
+    info >"$root/boot/firmware/deck-image.txt"
     local after
     after=$(cd "$root" && ls -l etc/machine-id etc/ssh/ssh_host_* 2>/dev/null; cat etc/machine-id 2>/dev/null)
     if [ "$before" != "$after" ]; then
@@ -168,6 +183,7 @@ build() {
     xz -T0 -6 -c "$img" >"/out/$name.img.xz.part"
     mv "/out/$name.img.xz.part" "/out/$name.img.xz"
     (cd /out && sha256sum "$name.img.xz" >"$name.img.xz.sha256" && cat "$name.img.xz.sha256")
+    { info; echo "size=$(stat -c %s "$img")"; } >"/out/$name.img.xz.info"
     echo "uncompressed: $(du -h --apparent-size "$img" | cut -f1)" >&2
     rm -f "$img"
 }

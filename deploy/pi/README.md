@@ -48,7 +48,8 @@ the result, including booting it in a container. About 2 minutes on an
 Apple Silicon Mac once the caches are warm. `RASPIOS_URL=…` pins a
 particular release.
 
-Flash it with Raspberry Pi Imager: **Raspberry Pi 4**, **Use custom** → the
+Flash it with `deck-flash` (below), or with Raspberry Pi Imager to set up a
+login as you go: **Raspberry Pi 4**, **Use custom** → the
 `.img.xz`, then edit the OS customisation: a user and password, SSH (a key
 or password), Wi-Fi if you use it. The hostname is `deck` unless you set
 another there. The image has no user, password or keys of its own; without
@@ -56,6 +57,30 @@ a user from Imager, first boot shows Raspberry Pi OS's own "create a user"
 dialog on the screen (it needs a keyboard) before the deck. First boot grows
 the filesystem to fill the card and applies the customisation (it may
 restart once), then the deck starts.
+
+### With deck-flash
+
+`deck-flash` shows what's on a card and writes the image, from this
+repository on a Mac or Linux:
+
+```bash
+cargo run --release -p deck-flash               # the image here, the cards plugged in
+cargo run --release -p deck-flash -- status     # one card: partitions, what's on it, which build
+cargo run --release -p deck-flash -- flash      # write the newest image, then read it back
+cargo run --release -p deck-flash -- format     # erase a card to one FAT32 volume
+```
+
+(`make card` and `make flash` do the first and third; `cargo install --path
+crates/deck-flash` puts `deck-flash` in `~/.cargo/bin`.)
+
+It only touches removable disks, never the one the computer runs from or
+anything bigger than an SD card; shows what's on the card and makes you type
+its name before erasing it; checks the image's SHA-256 first, writes with a
+progress bar, reads the card back to prove it matches, and ejects it. It
+asks for your password (sudo) only for the write. It reads the card's
+`deck-image.txt` to tell you which build it holds and whether that's the
+image you have here, and whether the card has booted on a Pi yet. It doesn't
+set up a login: use Imager for that, or a keyboard at first boot.
 
 Already set up in the image: the deck at `/opt/deck/bin/deck`, starting at
 boot, `/etc/deck/deck.env` with `--device hifiberry --buffer 128`, the

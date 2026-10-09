@@ -80,7 +80,10 @@ run deck-image-binary \
     "debian:$codename" /src/deploy/pi/image/build-binary.sh
 
 say "Installing into the image"
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/crates/deck/Cargo.toml" | head -n1)
+commit=$(git -C "$repo" describe --always --dirty 2>/dev/null || echo unknown)
 run deck-image-build --privileged --cgroupns=host \
+    -e "DECK_VERSION=$version" -e "DECK_COMMIT=$commit" -e "DECK_BASE=${xz%.img.xz}" \
     -v "$repo:/src:ro" -v "$out:/out" \
     "debian:$codename" /src/deploy/pi/image/customize.sh build "$name"
 
