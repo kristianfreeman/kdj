@@ -196,6 +196,6 @@ mod tests {
         let p = newest().expect("an image in target/image");
         let size = xz_size(&p).expect("a readable index");
         println!("{}: {size} bytes", p.display());
-        assert!(size > 1_000_000_000 && size % 512 == 0, "{size}");
+        assert!(size > 1_000_000_000 && size.is_multiple_of(512), "{size}");
     }
 }
