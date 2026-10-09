@@ -10,6 +10,11 @@
 
 [midi]
 port = "XONE:K3"
+# Buttons' LEDs show the deck's state (playing, cue, SYNC, loops, hot cues).
+# On the Xone:K2/K3 the button's own note lights red; add 36 for amber or
+# 72 for green. A binding's `led = N` names a different note. `leds = false`
+# turns feedback off.
+led_offset = 0
 
 [[midi.map]]
 note = 36

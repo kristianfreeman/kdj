@@ -36,6 +36,13 @@ pub struct MidiConfig {
     pub port: Option<String>,
     #[serde(default)]
     pub map: Vec<Binding>,
+    /// Added to a button's note to address its LED (Xone:K2/K3: 0 red, 36
+    /// amber, 72 green). See `feedback`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub led_offset: Option<u8>,
+    /// Light the controller's LEDs with the deck's state (on unless false).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leds: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -62,6 +69,9 @@ pub struct Binding {
     /// 0 = deck A, 1 = deck B; the focused deck if omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deck: Option<usize>,
+    /// The note that lights this button's LED, if not its own note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub led: Option<u8>,
 }
 
 /// How relative encoders say which way they turned.

@@ -109,6 +109,13 @@ own if it's unplugged. Deck actions go from the MIDI
 thread straight into the engine, without waiting for a screen frame. See
 `config/midi-example.toml` for the format.
 
+Buttons light up with the deck's state, like a CDJ's: play while playing,
+cue at the cue point, SYNC, MASTER, key lock, quantize, the active loop size
+and LOOP, stored hot cues. The light goes to the button's own note on its
+channel, which is how most controllers (the Xone:K2/K3 included) address
+their LEDs; `led_offset` picks a K3 colour (0 red, 36 amber, 72 green) and
+`leds = false` turns it off.
+
 ## Raspberry Pi
 
 [`deploy/pi`](deploy/pi/README.md) turns Raspberry Pi OS Lite into a deck:

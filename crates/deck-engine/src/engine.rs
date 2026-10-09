@@ -990,6 +990,13 @@ impl Engine {
     }
 }
 
+impl Default for Snapshot {
+    /// A deck with nothing loaded.
+    fn default() -> Self {
+        Self::empty(BeatGrid::new(120.0, 0.0, 48_000))
+    }
+}
+
 impl Snapshot {
     const fn empty(grid: BeatGrid) -> Self {
         Self {

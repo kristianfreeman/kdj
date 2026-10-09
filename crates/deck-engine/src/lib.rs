@@ -4,6 +4,7 @@
 pub mod action;
 pub mod analysis;
 pub mod engine;
+pub mod feedback;
 pub mod grid;
 pub mod keymap;
 pub mod midimap;

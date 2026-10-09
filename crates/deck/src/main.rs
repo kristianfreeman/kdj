@@ -20,6 +20,7 @@
 //! hold Shift to send them to the other one.
 
 mod audio;
+mod leds;
 #[cfg(feature = "link")]
 mod link;
 mod midi;
@@ -445,7 +446,7 @@ fn run() -> Result<()> {
         status,
     };
     app.set_focus(0);
-    let midi = start_midi(&args, midi_inputs, &app.shared_focus)?;
+    let mut midi = start_midi(&args, midi_inputs, &app.shared_focus)?;
     let mut input = Input { keymap, held: HashMap::new(), touch: touch::Touch::default() };
     let mut frames = Frames { started: Instant::now(), loaded: false, snaps: Vec::with_capacity(app.slots.len()) };
     let mut audio_watch = AudioWatch { errors: 0, lost: false, logged: Instant::now(), rt_logged: false };
@@ -478,6 +479,9 @@ fn run() -> Result<()> {
         }
         audio_watch.check(&mut app, &audio);
         frames.render(&mut app, &screen.window, &audio.errors);
+        if let Some(leds) = midi.as_mut().and_then(|m| m.leds.as_mut()) {
+            leds.update(&frames.snaps, app.focus);
+        }
         if let Some(rest) = pace.and_then(|p| p.checked_sub(frame_start.elapsed())) {
             std::thread::sleep(rest);
         }

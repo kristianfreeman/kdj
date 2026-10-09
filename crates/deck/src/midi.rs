@@ -93,6 +93,8 @@ impl Dispatch {
 /// as the app.
 pub struct Midi {
     pub ui: mpsc::Receiver<UiAction>,
+    /// The controller's LEDs, if the mapping has any to light.
+    pub leds: Option<crate::leds::Leds>,
 }
 
 /// Start the controller thread.
@@ -105,7 +107,7 @@ pub fn start(cfg: &MidiConfig, map: MidiMap, decks: Vec<InputSender>, focus: Arc
         .spawn(move || keep_connected(wanted.as_deref(), &dispatch))
         .map_err(|e| eprintln!("midi: couldn't start: {e}"))
         .ok();
-    Midi { ui: ui_rx }
+    Midi { ui: ui_rx, leds: crate::leds::Leds::new(cfg) }
 }
 
 /// A port as last seen: its full name (on ALSA ending in "client:port"),
@@ -208,7 +210,7 @@ fn find_port(wanted: Option<&str>) -> Result<Option<Found>, String> {
 
 /// A port name without ALSA's trailing "client:port" ("XONE:K3 MIDI 1 24:0"
 /// is "XONE:K3 MIDI 1"), which changes between boots.
-fn base_name(name: &str) -> &str {
+pub fn base_name(name: &str) -> &str {
     let name = name.trim_end();
     let Some((head, last)) = name.rsplit_once(char::is_whitespace) else { return name };
     let numbers = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
@@ -285,7 +287,7 @@ pub fn learn(out: &Path, wanted: Option<&str>) -> Result<()> {
         }
     }
     // Without the client:port numbers, which change between boots.
-    let file = LearnFile { midi: MidiConfig { port: Some(base_name(&name).to_owned()), map } };
+    let file = LearnFile { midi: MidiConfig { port: Some(base_name(&name).to_owned()), map, ..Default::default() } };
     let text = toml::to_string_pretty(&file).context("writing mapping")?;
     std::fs::write(out, text).with_context(|| format!("writing {}", out.display()))?;
     println!("\nWrote {} controls to {}. Run: deck --midi {}", file.midi.map.len(), out.display(), out.display());
@@ -306,8 +308,17 @@ fn learn_one(ask: &Ask, rx: &mpsc::Receiver<Heard>) -> Option<Binding> {
     let msg = next_control(rx)?;
     let (status, data) = msg.split_first()?;
     let channel = Some((status & 0x0f) + 1);
-    let mut b =
-        Binding { channel, note: None, cc: None, action: None, up: None, down: None, encoding: None, deck: None };
+    let mut b = Binding {
+        channel,
+        note: None,
+        cc: None,
+        action: None,
+        up: None,
+        down: None,
+        encoding: None,
+        deck: None,
+        led: None,
+    };
     match (status & 0xf0, data) {
         (0x90, &[note, ..]) => b.note = Some(note),
         (0xb0, &[cc, value, ..]) => {
