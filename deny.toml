@@ -1,0 +1,50 @@
+# `cargo deny check` (part of `make lint`): licences, advisories, sources.
+
+[graph]
+all-features = false
+# Test-only dependencies (rekordcrate as a reference reader) never ship.
+exclude-dev = true
+
+[advisories]
+# RustSec advisories fail the check; yanked crates warn.
+yanked = "warn"
+ignore = [
+    # ttf-parser (via fontdue) is unmaintained. It only ever parses the two
+    # Geist files compiled into the binary, never fonts from outside, so
+    # there's no untrusted input. Revisit if fontdue moves on.
+    { id = "RUSTSEC-2026-0192", reason = "parses only our bundled fonts" },
+]
+
+[licenses]
+# deck is GPL-3.0-or-later (so it can use Ableton Link, which is
+# GPL-2.0-or-later). Dependencies must be GPLv3-compatible: permissive
+# licences, MPL-2.0 (symphonia, triple_buffer, rekordcrate), and GPL
+# "or later" (Link via rusty_link). GPL-2.0-only would be incompatible.
+allow = [
+    "GPL-3.0-or-later",
+    "GPL-2.0-or-later",
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

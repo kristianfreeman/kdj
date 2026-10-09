@@ -1,0 +1,78 @@
+name = "loops: set on the beat, roll down, move, exit"
+duration = 14.0
+
+[synth]
+bpm = 134.0
+bars = 64
+intro_bars = 0
+lead_in = 0.0
+
+[[step]]
+at = 0.1
+key = "Space"
+
+# At 2.0 s the playhead is at beat 4.243, so a 4-beat loop covers beats 4–8.
+[[step]]
+at = 2.0
+key = "3"
+# Unlooped we'd be at beat 13.177 by 6.0 s; looped, 4 + (9.177 mod 4) = 5.177.
+[[expect]]
+at = 6.0
+loop_active = true
+loop_beats = 4.0
+in_loop = true
+beat = 5.1767
+beat_tol = 0.01
+
+# Halve twice down to 1 beat; the playhead always stays inside.
+[[step]]
+at = 6.5
+key = "["
+# At 6.5 s we're at beat 6.293 in the 4–8 loop; halving to 4–6 folds that to
+# 4.293, and 0.1 s later (+0.2233 beats) it's 4.517.
+[[expect]]
+at = 6.6
+loop_beats = 2.0
+in_loop = true
+beat = 4.5167
+beat_tol = 0.01
+[[step]]
+at = 7.0
+key = "["
+[[expect]]
+at = 7.1
+loop_beats = 1.0
+in_loop = true
+
+# Beat jump moves the loop with us.
+[[step]]
+at = 7.5
+key = "."
+[[expect]]
+at = 8.5
+loop_beats = 1.0
+in_loop = true
+
+# Exit and keep playing.
+[[step]]
+at = 9.0
+key = "L"
+[[expect]]
+at = 10.0
+loop_active = false
+playing = true
+
+# A 32-beat loop, then jump back a whole loop length.
+[[step]]
+at = 10.5
+key = "6"
+[[expect]]
+at = 11.0
+loop_beats = 32.0
+in_loop = true
+[[step]]
+at = 12.0
+key = ","
+[[expect]]
+at = 12.5
+in_loop = true

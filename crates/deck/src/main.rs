@@ -1,0 +1,842 @@
+//! deck: a DJ deck. Plays a track to the default output and draws the
+//! 800×480 screen, with a full-screen browser for the Rekordbox library.
+//!
+//!   deck [TRACK] [--decks 2] [--fullscreen] [--buffer FRAMES] [--device NAME] [--keymap FILE]
+//!        [--hud] [--midi FILE] [--midi-port NAME] [--no-link]
+//!   deck --midi-learn FILE [--midi-port NAME]  (write a MIDI mapping by touching each control)
+//!   deck --synth            (a synthetic techno track, no file needed)
+//!
+//! `--device` picks the audio output whose name contains NAME (the default
+//! output otherwise); `--midi-port` picks the MIDI input the same way,
+//! overriding the mapping file's `port`; `--no-link` stays out of Ableton
+//! Link sessions.
+//!
+//! With no track it opens in the browser: sources, then playlists, then
+//! tracks (↵ opens or loads, ← backs out, Tab closes). Dropping a file on the
+//! window loads it too. Loading is refused while playing.
+//!
+//! `--decks 2` is the beatmatching harness: two decks stacked, mixed to the
+//! output like two mixer channels. Keys go to the focused deck (`\` swaps);
+//! hold Shift to send them to the other one.
+
+mod audio;
+#[cfg(feature = "link")]
+mod link;
+mod midi;
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::time::{Duration, Instant, SystemTime};
+
+use anyhow::{Result, anyhow};
+use deck_engine::analysis::{self, synth::SynthSpec};
+use deck_engine::keymap::{Keymap, Layer};
+use deck_engine::midimap::MidiMap;
+use deck_engine::{Action, Edge, Engine, EngineConfig, EngineHandle, InputSender, Snapshot, Track};
+use deck_library::nav::{self, Node};
+use deck_library::{anlz, library};
+use deck_ui::Ui;
+use deck_ui::browser::{self, Browser};
+use sdl2::event::Event;
+use sdl2::keyboard::{Keycode, Mod};
+
+#[cfg(debug_assertions)]
+#[global_allocator]
+static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
+
+struct Args {
+    track: Option<PathBuf>,
+    synth: bool,
+    decks: usize,
+    fullscreen: bool,
+    buffer: u32,
+    keymap: Option<PathBuf>,
+    hud: bool,
+    /// A MIDI mapping file (`[midi]` table).
+    midi: Option<PathBuf>,
+    /// Write a MIDI mapping by asking for each control, then exit.
+    midi_learn: Option<PathBuf>,
+    /// Part of the MIDI input's name; overrides the mapping file's `port`.
+    midi_port: Option<String>,
+    /// Part of the audio output device's name; the default device if None.
+    device: Option<String>,
+    /// Don't join Ableton Link sessions.
+    no_link: bool,
+}
+
+fn parse_args() -> Result<Args> {
+    let mut a = Args {
+        track: None,
+        synth: false,
+        decks: 1,
+        fullscreen: false,
+        buffer: 128,
+        keymap: None,
+        hud: false,
+        midi: None,
+        midi_learn: None,
+        midi_port: None,
+        device: None,
+        no_link: false,
+    };
+    let mut it = std::env::args().skip(1);
+    while let Some(arg) = it.next() {
+        let mut value = || it.next().ok_or_else(|| anyhow!("{arg} needs a value"));
+        match arg.as_str() {
+            "--synth" => a.synth = true,
+            "--fullscreen" => a.fullscreen = true,
+            "--hud" => a.hud = true,
+            "--decks" => a.decks = value()?.parse::<usize>()?.clamp(1, 2),
+            "--buffer" => a.buffer = value()?.parse()?,
+            "--keymap" => a.keymap = Some(value()?.into()),
+            "--midi" => a.midi = Some(value()?.into()),
+            "--midi-learn" => a.midi_learn = Some(value()?.into()),
+            "--midi-port" => a.midi_port = Some(value()?),
+            "--device" => a.device = Some(value()?),
+            "--no-link" => a.no_link = true,
+            s if s.starts_with("--") => return Err(anyhow!("unknown option {s}")),
+            s => a.track = Some(s.into()),
+        }
+    }
+    Ok(a)
+}
+
+/// A finished background load, tagged with its deck and where in the browser
+/// it came from.
+struct Loaded {
+    deck: usize,
+    track: Result<Track, String>,
+    /// The browser entry it came from (`nav::track_id`), to mark as loaded.
+    entry_id: Option<u64>,
+}
+
+/// Where a load should go and come back to.
+struct LoadJob {
+    deck: usize,
+    path: PathBuf,
+    anlz_file: Option<PathBuf>,
+    loaded_id: Option<u64>,
+}
+
+/// Load off the UI thread. Like a CDJ: a track Rekordbox prepared brings its
+/// own grid, waveform and load cue, so it's only decoded; anything else gets
+/// our fallback analysis and shows as "auto grid".
+fn load_in_background(job: LoadJob, sr: u32, tx: mpsc::Sender<Loaded>) {
+    std::thread::spawn(move || {
+        let dat = job.anlz_file.clone().or_else(|| anlz::find(&job.path));
+        let known = dat
+            .as_deref()
+            .and_then(|d| anlz::prepared(d, sr))
+            .map(|p| analysis::Known { grid: p.grid, waveform: p.waveform, load_cue: p.load_cue, hot_cues: p.hot_cues })
+            .unwrap_or_default();
+        let source = match (known.grid.is_some(), known.waveform.is_some()) {
+            (true, true) => "Rekordbox grid and waveform",
+            (true, false) => "Rekordbox grid, our waveform",
+            _ => "not in Rekordbox: analysed here",
+        };
+        let track = analysis::load_file_known(&job.path, sr, known).map(|(t, timings)| {
+            eprintln!("loaded {} in {:.0} ms ({source})", t.title, timings.total().as_secs_f64() * 1000.0);
+            t
+        });
+        let _ = tx.send(Loaded { deck: job.deck, track: track.map_err(|e| format!("{e:#}")), entry_id: job.loaded_id });
+    });
+}
+
+fn synth_in_background(deck: usize, bpm: f64, sr: u32, tx: mpsc::Sender<Loaded>) {
+    std::thread::spawn(move || {
+        let seed = u32::try_from(deck).map_or(1, |d| d.saturating_add(1));
+        let spec = SynthSpec { sample_rate: sr, bars: 160, bpm, seed, ..Default::default() };
+        let (t, _) = analysis::build(format!("Synthetic hardgroove {bpm} bpm"), analysis::synth::render(&spec), sr);
+        let _ = tx.send(Loaded { deck, track: Ok(t), entry_id: None });
+    });
+}
+
+/// A finished library scan, with the sources as they were when it started.
+struct Scan {
+    stamps: Vec<SourceStamp>,
+    libs: Vec<library::Library>,
+}
+
+/// What tells one library source from another: where it is, and its export
+/// database's modified time and size (another stick with the same volume
+/// name mounts at the same path).
+type SourceStamp = (PathBuf, Option<(Option<SystemTime>, u64)>);
+
+fn stamp(s: &library::Source) -> SourceStamp {
+    let pdb = s.pdb.as_ref().and_then(|p| std::fs::metadata(p).ok()).map(|m| (m.modified().ok(), m.len()));
+    (s.usbanlz.clone(), pdb)
+}
+
+fn source_stamps() -> Vec<SourceStamp> {
+    library::sources().iter().map(stamp).collect()
+}
+
+/// Read every library source (collection, USB sticks) in the background.
+fn scan_in_background(tx: mpsc::Sender<Scan>) {
+    std::thread::spawn(move || {
+        let sources = library::sources();
+        let stamps = sources.iter().map(stamp).collect();
+        let libs = sources.iter().map(library::scan).collect();
+        let _ = tx.send(Scan { stamps, libs });
+    });
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("deck: {e:#}");
+        std::process::exit(1);
+    }
+}
+
+/// One deck as the UI thread sees it.
+struct Slot {
+    deck: EngineHandle,
+    ui: Ui,
+    /// The track on the deck, once the engine has taken it.
+    current: Option<Arc<Track>>,
+    loaded_id: Option<u64>,
+    /// A track handed to the engine and not yet on the deck. The engine
+    /// still drops it if the deck started playing in the meantime.
+    pending: Option<Pending>,
+}
+
+struct Pending {
+    track: Arc<Track>,
+    entry_id: Option<u64>,
+    since: Instant,
+}
+
+/// How long a load may take to show up on the deck before it counts as
+/// refused.
+const LOAD_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Everything the UI thread owns.
+struct App {
+    slots: Vec<Slot>,
+    /// The deck the keyboard (and the browser) controls.
+    focus: usize,
+    /// The same, for the MIDI thread.
+    shared_focus: Arc<AtomicUsize>,
+    hud: Hud,
+    browser: Browser,
+    libs: Vec<library::Library>,
+    /// The library node behind each browser item, level by level.
+    nav: Vec<Vec<Node>>,
+    /// Sources the current scan covered, to notice a stick going in.
+    scanned: Vec<SourceStamp>,
+    scan_tx: mpsc::Sender<Scan>,
+    load_tx: mpsc::Sender<Loaded>,
+    sample_rate: u32,
+    status: String,
+}
+
+impl App {
+    /// Handle an action aimed at deck `target`.
+    fn act(&mut self, a: Action, e: Edge, target: usize) {
+        if !a.is_ui() {
+            self.slots[target].deck.send(a, e);
+            return;
+        }
+        if e == Edge::Release {
+            return;
+        }
+        let b = &mut self.browser;
+        match a {
+            Action::ZoomIn => self.slots[target].ui.zoom(false),
+            Action::ZoomOut => self.slots[target].ui.zoom(true),
+            Action::ToggleHud => self.hud.on = !self.hud.on,
+            Action::SwitchDeck => self.set_focus((self.focus + 1) % self.slots.len()),
+            Action::Browse => {
+                b.open = !b.open;
+                if b.open {
+                    self.rescan_if_sources_changed();
+                }
+            }
+            Action::BrowseUp => b.move_by(-1),
+            Action::BrowseDown => b.move_by(1),
+            Action::BrowsePageUp => b.move_by(-browser::ROWS.cast_signed()),
+            Action::BrowsePageDown => b.move_by(browser::ROWS.cast_signed()),
+            Action::BrowseLoad => self.open_selected(Some(target)),
+            Action::BrowseEnter => self.open_selected(None),
+            Action::BrowseBack if b.pop() => {
+                self.nav.pop();
+            }
+            _ => {}
+        }
+    }
+
+    fn set_focus(&mut self, i: usize) {
+        self.focus = i;
+        self.shared_focus.store(i, Ordering::Relaxed);
+        self.browser.loaded = self.slots[i].loaded_id;
+        let n = self.slots.len();
+        for ((j, s), letter) in self.slots.iter_mut().enumerate().zip('A'..) {
+            s.ui.view.tag = (n > 1).then_some((letter, j == i));
+        }
+    }
+
+    /// Open the highlighted folder or playlist; with `load`, a highlighted
+    /// track goes onto that deck.
+    fn open_selected(&mut self, load: Option<usize>) {
+        let Some(node) = self.browser.selected().and_then(|i| self.nav.last()?.get(i).copied()) else { return };
+        match (node, load) {
+            (Node::Track(s, i), Some(deck)) => {
+                if self.slots[deck].deck.snapshot().playing {
+                    self.status = "Stop the deck to load".into();
+                    return;
+                }
+                let Some(e) = self.libs.get(s).and_then(|l| l.entries.get(i)) else { return };
+                self.status = format!("Loading {}…", e.title);
+                let job = LoadJob {
+                    deck,
+                    path: e.audio.clone(),
+                    anlz_file: Some(e.anlz.clone()),
+                    loaded_id: Some(nav::track_id(e)),
+                };
+                load_in_background(job, self.sample_rate, self.load_tx.clone());
+            }
+            (Node::Track(..), None) => {}
+            (folder, _) => {
+                let (level, nodes) = browser::level_for(&self.libs, folder);
+                self.browser.push(level);
+                self.nav.push(nodes);
+            }
+        }
+    }
+
+    /// Load a file dropped on the window onto the focused deck.
+    fn load_dropped(&mut self, p: PathBuf) {
+        if self.slots[self.focus].deck.snapshot().playing {
+            self.status = "Stop the deck to load".into();
+            return;
+        }
+        self.status = format!("Analysing {}…", file_name(&p));
+        let job = LoadJob { deck: self.focus, path: p, anlz_file: None, loaded_id: None };
+        load_in_background(job, self.sample_rate, self.load_tx.clone());
+    }
+
+    fn rescan_if_sources_changed(&mut self) {
+        if !self.browser.scanning && source_stamps() != self.scanned {
+            self.browser.scanning = true;
+            scan_in_background(self.scan_tx.clone());
+        }
+    }
+
+    fn take_libraries(&mut self, scan: Scan) {
+        self.scanned = scan.stamps;
+        self.libs = scan.libs;
+        self.browser.scanning = false;
+        if self.libs.is_empty() {
+            self.browser.clear();
+            self.nav.clear();
+            return;
+        }
+        let (level, nodes) = browser::level_for(&self.libs, nav::root(&self.libs));
+        self.browser.reset(level);
+        self.nav = vec![nodes];
+    }
+
+    /// Hand a finished load to its deck. The screen follows once the engine
+    /// has taken it (see `settle_loads`).
+    fn take_loaded(&mut self, loaded: Loaded) {
+        let slot = &mut self.slots[loaded.deck];
+        match loaded.track {
+            Ok(t) => {
+                let t = Arc::new(t);
+                if slot.deck.load(Arc::clone(&t)).is_err() {
+                    self.status = "Stop the deck to load".into();
+                    return;
+                }
+                slot.pending = Some(Pending { track: t, entry_id: loaded.entry_id, since: Instant::now() });
+            }
+            Err(e) => self.status = format!("Couldn't load: {e}"),
+        }
+    }
+
+    /// Show each pending track once its deck has it. One that hasn't arrived
+    /// in time was dropped by the engine (the deck started playing before it
+    /// got there), and the screen keeps showing what's really on the deck.
+    /// True if a track went on this frame.
+    fn settle_loads(&mut self) -> bool {
+        let mut any = false;
+        for (i, slot) in self.slots.iter_mut().enumerate() {
+            let Some(p) = slot.pending.take() else { continue };
+            if slot.deck.snapshot().track_id == p.track.id {
+                slot.ui.set_track(&p.track);
+                slot.current = Some(p.track);
+                slot.loaded_id = p.entry_id;
+                if i == self.focus {
+                    self.browser.loaded = p.entry_id;
+                    self.browser.open = false;
+                }
+                self.status.clear();
+                any = true;
+            } else if p.since.elapsed() > LOAD_TIMEOUT {
+                self.status = "Stop the deck to load".into();
+            } else {
+                slot.pending = Some(p);
+            }
+        }
+        any
+    }
+}
+
+fn run() -> Result<()> {
+    let args = parse_args()?;
+    if let Some(out) = &args.midi_learn {
+        return midi::learn(out, args.midi_port.as_deref());
+    }
+    let keymap = match &args.keymap {
+        Some(p) => Keymap::with_overrides(&std::fs::read_to_string(p)?)?,
+        None => Keymap::default(),
+    };
+    print_keys(&keymap);
+
+    // Audio first: the device decides the sample rate everything runs at.
+    let output = audio::Output::open(args.buffer, args.device.as_deref())?;
+    let sample_rate = output.sample_rate();
+    let mut engines = Vec::new();
+    let mut handles = Vec::new();
+    let mut midi_inputs = Vec::new();
+    for _ in 0..args.decks {
+        let (e, h, inputs) = Engine::new(EngineConfig { sample_rate, extra_inputs: 1, ..Default::default() });
+        engines.push(e);
+        handles.push(h);
+        midi_inputs.extend(inputs);
+    }
+    eprintln!("audio: {} at {} Hz, asked for {} frames, {} deck(s)", output.name, sample_rate, args.buffer, args.decks);
+    let mut audio = output.start(engines, link_hook(&args, sample_rate))?;
+
+    let (load_tx, load_rx) = mpsc::channel::<Loaded>();
+    let (scan_tx, scan_rx) = mpsc::channel();
+    scan_in_background(scan_tx.clone());
+    let status = start_loading(&args, sample_rate, &load_tx);
+
+    let screen = Screen::open(&args)?;
+    let slots = screen.slots(handles)?;
+    let mut events = screen.sdl.event_pump().map_err(|e| anyhow!(e))?;
+
+    let mut app = App {
+        slots,
+        focus: 0,
+        shared_focus: Arc::new(AtomicUsize::new(0)),
+        hud: Hud::new(args.hud),
+        browser: Browser::new(args.track.is_none() && !args.synth),
+        libs: Vec::new(),
+        nav: Vec::new(),
+        scanned: Vec::new(),
+        scan_tx,
+        load_tx,
+        sample_rate,
+        status,
+    };
+    app.set_focus(0);
+    let midi = start_midi(&args, midi_inputs, &app.shared_focus)?;
+    let mut input = Input { keymap, held: HashMap::new() };
+    let mut frames = Frames { started: Instant::now(), loaded: false, snaps: Vec::with_capacity(app.slots.len()) };
+    let mut audio_watch = AudioWatch { errors: 0, lost: false, logged: Instant::now() };
+    // Without vsync, pace the loop to about 60 fps instead of spinning a core.
+    let pace = (!screen.vsync).then(|| Duration::from_micros(16_667));
+
+    loop {
+        let frame_start = Instant::now();
+        // Input first, straight to the engines, before this frame's render.
+        for event in events.poll_iter() {
+            if !input.handle(&mut app, event) {
+                return Ok(());
+            }
+        }
+
+        // Controller actions for the browser and screen (deck actions went
+        // straight to the engines).
+        for (a, e, deck) in midi.iter().flat_map(|m| m.ui.try_iter()) {
+            app.act(a, e, deck);
+        }
+        if let Ok(scan) = scan_rx.try_recv() {
+            app.take_libraries(scan);
+        }
+        while let Ok(loaded) = load_rx.try_recv() {
+            app.take_loaded(loaded);
+        }
+        frames.loaded |= app.settle_loads();
+        while let Ok(s) = audio.stats.pop() {
+            app.hud.callback(s, sample_rate);
+        }
+        audio_watch.check(&mut app, &audio);
+        frames.render(&mut app, &screen.window, &audio.errors);
+        if let Some(rest) = pace.and_then(|p| p.checked_sub(frame_start.elapsed())) {
+            std::thread::sleep(rest);
+        }
+    }
+}
+
+/// Start the controller thread if there's a mapping file.
+fn start_midi(args: &Args, inputs: Vec<InputSender>, focus: &Arc<AtomicUsize>) -> Result<Option<midi::Midi>> {
+    let Some(path) = &args.midi else { return Ok(None) };
+    let (map, mut cfg) = MidiMap::from_toml(&std::fs::read_to_string(path)?)?;
+    if args.midi_port.is_some() {
+        cfg.port.clone_from(&args.midi_port);
+    }
+    Ok(Some(midi::start(&cfg, map, inputs, Arc::clone(focus))))
+}
+
+/// Reports what the audio side counted (it can't print from the callback).
+struct AudioWatch {
+    /// Stream errors already logged.
+    errors: u64,
+    /// The device loss was already logged.
+    lost: bool,
+    logged: Instant,
+}
+
+impl AudioWatch {
+    const LOST: &str = "Audio device lost";
+
+    /// Log new stream errors (at most once a second), and keep a lost device
+    /// on screen: the deck has gone quiet and won't come back by itself.
+    fn check(&mut self, app: &mut App, audio: &audio::Audio) {
+        let errors = audio.errors.load(Ordering::Relaxed);
+        if errors > self.errors && self.logged.elapsed() >= Duration::from_secs(1) {
+            eprintln!("audio: {} stream error(s) (xruns or worse), {errors} in all", errors - self.errors);
+            self.errors = errors;
+            self.logged = Instant::now();
+        }
+        if audio.lost.load(Ordering::Relaxed) {
+            if !self.lost {
+                eprintln!("audio: the output device is gone");
+                self.lost = true;
+            }
+            if app.status != Self::LOST {
+                Self::LOST.clone_into(&mut app.status);
+            }
+        }
+    }
+}
+
+/// Join Ableton Link sessions on the network, unless told not to.
+#[cfg(feature = "link")]
+fn link_hook(args: &Args, sample_rate: u32) -> Option<Box<dyn audio::BlockHook>> {
+    if args.no_link {
+        return None;
+    }
+    let link = Arc::new(rusty_link::AblLink::new(120.0));
+    link.set_num_peers_callback(|n| eprintln!("link: {n} peer(s) in the session"));
+    link.enable(true);
+    eprintln!("link: joined the session on the local network");
+    Some(Box::new(link::LinkDriver::new(link, sample_rate)))
+}
+
+#[cfg(not(feature = "link"))]
+fn link_hook(_: &Args, _: u32) -> Option<Box<dyn audio::BlockHook>> {
+    None
+}
+
+/// Start loading whatever the command line asked for; returns the status
+/// line to show meanwhile.
+fn start_loading(args: &Args, sample_rate: u32, load_tx: &mpsc::Sender<Loaded>) -> String {
+    if args.synth {
+        // Slightly different tempos, so there's something to beatmatch.
+        for (deck, bpm) in [134.0, 135.0].into_iter().take(args.decks).enumerate() {
+            synth_in_background(deck, bpm, sample_rate, load_tx.clone());
+        }
+    } else if let Some(p) = &args.track {
+        let job = LoadJob { deck: 0, path: p.clone(), anlz_file: None, loaded_id: None };
+        load_in_background(job, sample_rate, load_tx.clone());
+        return format!("Analysing {}…", file_name(p));
+    }
+    String::new()
+}
+
+/// The window and its GL context. Fields drop in order: the context before
+/// the window, the window before SDL.
+struct Screen {
+    _gl: sdl2::video::GLContext,
+    window: sdl2::video::Window,
+    video: sdl2::VideoSubsystem,
+    sdl: sdl2::Sdl,
+    /// OpenGL ES rather than desktop GL.
+    es: bool,
+    /// Presenting waits for vertical sync (and so paces the loop).
+    vsync: bool,
+}
+
+impl Screen {
+    /// Window and GL. ES on Linux (the Pi), 3.3 core elsewhere.
+    fn open(args: &Args) -> Result<Self> {
+        let sdl = sdl2::init().map_err(|e| anyhow!(e))?;
+        let video = sdl.video().map_err(|e| anyhow!(e))?;
+        let es = cfg!(target_os = "linux");
+        {
+            let attr = video.gl_attr();
+            if es {
+                attr.set_context_profile(sdl2::video::GLProfile::GLES);
+                attr.set_context_version(3, 0);
+            } else {
+                attr.set_context_profile(sdl2::video::GLProfile::Core);
+                attr.set_context_version(3, 3);
+                attr.set_context_flags().forward_compatible().set();
+            }
+        }
+        let height = screen_px(deck_ui::HEIGHT) * u32::try_from(args.decks)?;
+        let mut wb = video.window("deck", screen_px(deck_ui::WIDTH), height);
+        wb.opengl().allow_highdpi().resizable().position_centered();
+        if args.fullscreen {
+            wb.fullscreen_desktop();
+        }
+        let window = wb.build()?;
+        let gl = window.gl_create_context().map_err(|e| anyhow!(e))?;
+        let vsync = video
+            .gl_set_swap_interval(sdl2::video::SwapInterval::VSync)
+            .map_err(|e| eprintln!("screen: no vsync ({e}); pacing frames by sleeping"))
+            .is_ok();
+        if args.fullscreen {
+            sdl.mouse().show_cursor(false);
+        }
+        Ok(Self { _gl: gl, window, video, sdl, es, vsync })
+    }
+
+    /// A UI for each deck, each with its own handle on the GL context.
+    fn slots(&self, handles: Vec<EngineHandle>) -> Result<Vec<Slot>> {
+        // Pixels per point: 2 on a high-DPI screen. Window sizes fit in u16.
+        let px = |v: u32| f32::from(u16::try_from(v).unwrap_or(u16::MAX));
+        let scale = px(self.window.drawable_size().0) / px(self.window.size().0.max(1));
+        handles
+            .into_iter()
+            .map(|deck| {
+                // SAFETY: the context `open` created is current on this
+                // thread, and SDL's loader returns that context's functions.
+                let gl = unsafe { glow::Context::from_loader_function(|s| self.video.gl_get_proc_address(s).cast()) };
+                Ok(Slot { deck, ui: Ui::new(gl, self.es, scale)?, current: None, loaded_id: None, pending: None })
+            })
+            .collect()
+    }
+}
+
+/// A screen dimension (a small whole number of points) as window pixels.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the UI's dimensions are small positive whole numbers; a float-to-int `as` saturates anyway"
+)]
+const fn screen_px(points: f32) -> u32 {
+    points as u32
+}
+
+/// Keyboard and drag-and-drop, routed to the app.
+struct Input {
+    keymap: Keymap,
+    /// What each held key pressed (and on which deck), so its release goes to
+    /// the same place even if the browser or focus changed in between.
+    held: HashMap<String, (Action, usize)>,
+}
+
+impl Input {
+    /// Handle one window event; false when the window is closing.
+    fn handle(&mut self, app: &mut App, event: Event) -> bool {
+        match event {
+            Event::Quit { .. } => return false,
+            Event::KeyDown { keycode: Some(k), keymod, repeat, .. } => self.key_down(app, k, keymod, repeat),
+            Event::KeyUp { keycode: Some(k), .. } => {
+                if let Some((a, target)) = self.held.remove(&k.name()) {
+                    app.act(a, Edge::Release, target);
+                }
+            }
+            Event::DropFile { filename, .. } => app.load_dropped(PathBuf::from(filename)),
+            _ => {}
+        }
+        true
+    }
+
+    fn key_down(&mut self, app: &mut App, k: Keycode, keymod: Mod, repeat: bool) {
+        let layer = if app.browser.open { Layer::Browser } else { Layer::Deck };
+        let name = k.name();
+        let Some(a) = self.keymap.get_in(&name, layer) else { return };
+        let shift = keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD);
+        let target = if shift { (app.focus + 1) % app.slots.len() } else { app.focus };
+        if !repeat {
+            self.held.insert(name, (a, target));
+            app.act(a, Edge::Press, target);
+        } else if a.repeats() {
+            app.act(a, Edge::Press, target);
+        }
+    }
+}
+
+/// What the render loop keeps from frame to frame.
+struct Frames {
+    started: Instant,
+    /// A track finished loading since the last frame (for slow-frame reports).
+    loaded: bool,
+    /// This frame's engine snapshots, one per deck; reused.
+    snaps: Vec<Snapshot>,
+}
+
+impl Frames {
+    /// Draw every deck and present, reporting a frame that came late.
+    fn render(&mut self, app: &mut App, window: &sdl2::video::Window, audio_errors: &AtomicU64) {
+        self.snaps.clear();
+        for slot in &mut app.slots {
+            slot.deck.collect_garbage();
+            let snap = slot.deck.snapshot();
+            // Don't show the previous track's frame before the engine switches.
+            let current = slot.current.as_ref().is_some_and(|t| t.id == snap.track_id);
+            self.snaps.push(if current { snap } else { Snapshot { track_frames: 0, ..snap } });
+        }
+        let hud_text = app.hud.text(audio_errors.load(Ordering::Relaxed));
+        let size = window.drawable_size();
+        let t = Instant::now();
+        let cpu = draw_decks(app, &self.snaps, size, &hud_text);
+        let draw = t.elapsed().saturating_sub(cpu);
+        window.gl_swap_window();
+        let swap = t.elapsed().saturating_sub(draw).saturating_sub(cpu);
+        if let Some(gap) = app.hud.frame(cpu)
+            && gap > 20.0
+        {
+            self.report_slow(gap, cpu, draw, swap);
+        }
+        self.loaded = false;
+    }
+
+    /// Where a slow frame's time went, in ms.
+    fn report_slow(&self, gap: f32, cpu: Duration, draw: Duration, swap: Duration) {
+        let ms = |d: Duration| d.as_secs_f32() * 1000.0;
+        let other = gap - ms(cpu) - ms(draw) - ms(swap);
+        eprintln!(
+            "slow frame at {:.1} s: {gap:.1} ms (build {:.2}, draw {:.2}, swap {:.1}, input/loading/other {other:.1}{})",
+            self.started.elapsed().as_secs_f64(),
+            ms(cpu),
+            ms(draw),
+            ms(swap),
+            if self.loaded { "; track loaded this frame" } else { "" }
+        );
+    }
+}
+
+/// Build and draw each deck's slot of the screen; returns the CPU time spent
+/// building.
+fn draw_decks(app: &mut App, snaps: &[Snapshot], size: (u32, u32), hud_text: &str) -> Duration {
+    let n = app.slots.len();
+    let mut cpu = Duration::ZERO;
+    app.slots[0].ui.gpu.clear_all(size);
+    for i in 0..n {
+        let focused = i == app.focus;
+        let other = (n > 1).then(|| &snaps[(i + 1) % n]);
+        let empty = app.slots[i].current.is_none();
+        let status = if focused && empty && app.status.is_empty() {
+            "Tab to browse"
+        } else if focused {
+            &app.status
+        } else {
+            ""
+        };
+        let browser = if focused { Some(&mut app.browser) } else { None };
+        let hud = if i == 0 { hud_text } else { "" };
+        cpu += app.slots[i].ui.build(&snaps[i], other, browser, status, hud);
+        app.slots[i].ui.draw_slot(size, i, n);
+    }
+    cpu
+}
+
+/// Live perf overlay: audio callback cost against its period, UI frame cost,
+/// frame pacing, audio errors.
+struct Hud {
+    on: bool,
+    cb_ns: Vec<u32>,
+    period_us: f64,
+    frame_cpu: Vec<f32>,
+    last_frame: Instant,
+    worst_gap_ms: f32,
+    text: String,
+    refreshed: Instant,
+    frames_seen: u32,
+}
+
+impl Hud {
+    fn new(on: bool) -> Self {
+        Self {
+            on,
+            cb_ns: Vec::with_capacity(8192),
+            period_us: 0.0,
+            frame_cpu: Vec::with_capacity(512),
+            last_frame: Instant::now(),
+            worst_gap_ms: 0.0,
+            text: String::new(),
+            refreshed: Instant::now(),
+            frames_seen: 0,
+        }
+    }
+
+    fn callback(&mut self, s: audio::CallbackStat, sample_rate: u32) {
+        if self.cb_ns.len() < self.cb_ns.capacity() {
+            self.cb_ns.push(s.ns);
+        }
+        self.period_us = f64::from(s.frames) / f64::from(sample_rate) * 1e6;
+    }
+
+    /// Record a presented frame; returns the time since the previous one, in ms.
+    fn frame(&mut self, cpu: Duration) -> Option<f32> {
+        if self.frame_cpu.len() < self.frame_cpu.capacity() {
+            self.frame_cpu.push(cpu.as_secs_f32() * 1000.0);
+        }
+        let gap = self.last_frame.elapsed().as_secs_f32() * 1000.0;
+        self.worst_gap_ms = self.worst_gap_ms.max(gap);
+        self.last_frame = Instant::now();
+        // The first few frames include window setup; don't report them.
+        if self.frames_seen < 3 {
+            self.frames_seen += 1;
+            return None;
+        }
+        Some(gap)
+    }
+
+    /// Refreshed twice a second from the samples gathered since.
+    fn text(&mut self, audio_errors: u64) -> String {
+        if !self.on {
+            return String::new();
+        }
+        if self.refreshed.elapsed() > Duration::from_millis(500) {
+            self.refresh(audio_errors);
+        }
+        self.text.clone()
+    }
+
+    /// Summarise the samples gathered so far, if there are any, and start over.
+    fn refresh(&mut self, audio_errors: u64) {
+        self.cb_ns.sort_unstable();
+        let (Some(&p99), Some(&max)) = (self.cb_ns.get(self.cb_ns.len() * 99 / 100), self.cb_ns.last()) else {
+            return;
+        };
+        let (p99, max) = (f64::from(p99) / 1000.0, f64::from(max) / 1000.0);
+        self.frame_cpu.sort_by(f32::total_cmp);
+        let ui = self.frame_cpu.get(self.frame_cpu.len() * 99 / 100).copied().unwrap_or(0.0);
+        self.text = format!(
+            "audio p99 {p99:.0} µs · max {max:.0} µs of {:.0} µs · ui {ui:.2} ms · worst frame {:.1} ms · errors {audio_errors}",
+            self.period_us, self.worst_gap_ms
+        );
+        self.cb_ns.clear();
+        self.frame_cpu.clear();
+        self.worst_gap_ms = 0.0;
+        self.refreshed = Instant::now();
+    }
+}
+
+fn file_name(p: &Path) -> String {
+    p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+fn print_keys(km: &Keymap) {
+    eprintln!("keys (Tab opens the browser):");
+    let mut line = String::new();
+    for (key, action) in km.bindings() {
+        let item = format!("  {key:>8} {action:?}");
+        if line.len() + item.len() > 100 {
+            eprintln!("{line}");
+            line.clear();
+        }
+        line.push_str(&item);
+    }
+    eprintln!("{line}");
+}

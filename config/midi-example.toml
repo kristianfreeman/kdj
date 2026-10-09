@@ -1,0 +1,35 @@
+# Example MIDI mapping. Generate one for your controller with:
+#   deck --midi-learn my-controller.toml
+# then run with:
+#   deck --midi my-controller.toml
+#
+# Notes are buttons (press / release); `cc` with `action` is a button too
+# (64 and up = pressed). `cc` with `up` / `down` is an endless encoder:
+# one action per click. `channel` is 1–16 (any if omitted); `deck` is
+# 0 = A, 1 = B (the focused deck if omitted).
+
+[midi]
+port = "XONE:K3"
+
+[[midi.map]]
+note = 36
+action = "PlayPause"
+
+[[midi.map]]
+note = 37
+action = "Cue"
+
+[[midi.map]]
+cc = 0
+up = "JogForward"
+down = "JogBack"
+
+[[midi.map]]
+cc = 1
+up = "TempoUp"
+down = "TempoDown"
+
+[[midi.map]]
+cc = 2
+up = "BrowseDown"
+down = "BrowseUp"

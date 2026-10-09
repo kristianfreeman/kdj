@@ -1,0 +1,29 @@
+[package]
+name = "deck"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+assert_no_alloc = "1.1.2"
+cpal = "0.18.2"
+deck-engine = { version = "0.1.0", path = "../deck-engine" }
+deck-library = { version = "0.1.0", path = "../deck-library" }
+deck-ui = { version = "0.1.0", path = "../deck-ui" }
+glow = "0.18.0"
+midir = "0.11.0"
+rtrb = "0.4.0"
+rusty_link = { version = "0.4.9", optional = true }
+sdl2 = { version = "0.38.0", features = ["use-pkgconfig"] }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
+
+[lints]
+workspace = true
+
+[features]
+default = ["link"]
+# Ableton Link (GPL-2.0-or-later; needs cmake and libclang to build).
+link = ["dep:rusty_link"]

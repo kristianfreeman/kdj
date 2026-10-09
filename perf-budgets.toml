@@ -1,0 +1,28 @@
+# Performance budgets, stated for the Raspberry Pi 4 (the target), not the dev machine.
+#
+# Until Milestone 2 measures on a real Pi, host timings are scaled by
+# `pi_slowdown` to estimate Pi timings. 12x is a deliberately pessimistic guess
+# for an Apple M4-class core versus a Cortex-A72 at 1.8 GHz; replace it with a
+# measured ratio once the Pi is on the bench (`deck-sim perf` runs there too).
+
+[host]
+pi_slowdown = 12.0
+
+[audio]
+sample_rate = 48000
+buffer_frames = 128            # 2.67 ms period
+# Share of the buffer period the callback may spend on the Pi. Above ~70% a
+# PREEMPT_RT kernel still risks an xrun when another interrupt lands.
+p99_of_period = 0.35
+max_of_period = 0.70
+seconds = 60                   # audio rendered under the stress scenario
+
+[load]
+# A 7-minute track, file on disk to playable deck, on the Pi.
+total_seconds = 8.0
+
+[ui]
+# CPU time for one two-deck frame on the Pi (the frame is 16.7 ms): build
+# both decks' draw lists and submit their GL draws (GPU time not included).
+# A warmed-up frame must also make no heap allocations.
+frame_cpu_ms = 4.0

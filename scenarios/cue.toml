@@ -1,0 +1,66 @@
+name = "cue: set on the beat, preview while held, return on release"
+duration = 6.0
+
+[synth]
+bpm = 134.0
+bars = 32
+intro_bars = 0
+lead_in = 0.0
+
+# Paused at the top: jump in 4 beats, then step 1/8 beat off the grid.
+[[step]]
+at = 0.1
+key = "."
+[[step]]
+at = 0.2
+key = "Right"
+[[expect]]
+at = 0.3
+playing = false
+beat = 4.125
+
+# Holding cue snaps it to beat 4 (quantize is on) and previews from there.
+[[step]]
+at = 0.5
+key = "C"
+hold = 1.0
+[[expect]]
+at = 1.0
+playing = true
+previewing = true
+cue_beat = 4.0
+[[expect]]
+at = 1.6
+playing = false
+beat = 4.0
+
+# Play for exactly one second: 134 bpm → 2.2333 beats.
+[[step]]
+at = 2.0
+key = "Space"
+[[expect]]
+at = 3.0
+playing = true
+beat = 6.2333
+
+# Cue while playing: back to the cue point, stopped.
+[[step]]
+at = 3.5
+key = "C"
+[[expect]]
+at = 3.6
+playing = false
+beat = 4.0
+
+# Pressing play during a preview keeps it playing after cue is released.
+[[step]]
+at = 4.0
+key = "C"
+hold = 1.0
+[[step]]
+at = 4.5
+key = "Space"
+[[expect]]
+at = 5.5
+playing = true
+previewing = false
