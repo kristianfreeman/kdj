@@ -95,11 +95,11 @@ for u in getty@tty1.service bluetooth.service apt-daily.timer; do
     s=$(systemctl is-enabled "$u" 2>/dev/null || true)
     [ "$s" != enabled ] || fail "$u still enabled"
 done
-for u in autovt@tty1.service NetworkManager-wait-online.service; do
+for u in autovt@tty1.service NetworkManager-wait-online.service userconfig.service; do
     [ "$(systemctl is-enabled "$u" 2>/dev/null || true)" = masked ] || fail "$u not masked"
 done
 cat /etc/systemd/system-preset/10-deck.preset
-for u in rpi-resize.service cloud-init-main.service userconfig.service; do
+for u in rpi-resize.service cloud-init-main.service; do
     systemctl is-enabled "$u" | grep -qx enabled || fail "first-boot unit $u not enabled"
 done
 

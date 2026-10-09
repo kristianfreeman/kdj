@@ -92,13 +92,17 @@ quiet=(apt-daily.timer apt-daily-upgrade.timer man-db.timer e2scrub_all.timer
 # Masked: enabling NetworkManager or systemd-networkd, as first boot does,
 # would enable these again.
 wait_online=(NetworkManager-wait-online.service systemd-networkd-wait-online.service)
+# Never a keyboard: Raspberry Pi OS's first-boot "create a user" dialog is
+# off for good. A login comes from cloud-init (deck-flash or Imager writes
+# user-data on the card) or not at all; the deck runs as its own user.
+never_ask=(userconfig.service)
 now=()
 [ "$live" -eq 1 ] && now=(--now)
 exists() { systemctl list-unit-files --no-legend "$1" 2>/dev/null | grep -q .; }
 for unit in "${quiet[@]}"; do
     if exists "$unit"; then systemctl disable "${now[@]}" "$unit" >/dev/null 2>&1 || true; fi
 done
-for unit in "${wait_online[@]}"; do
+for unit in "${wait_online[@]}" "${never_ask[@]}"; do
     if exists "$unit"; then systemctl mask "${now[@]}" "$unit" >/dev/null 2>&1 || true; fi
 done
 # On a fresh image's first boot systemd applies the presets to every unit,

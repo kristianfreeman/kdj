@@ -52,11 +52,12 @@ Flash it with `deck-flash` (below), or with Raspberry Pi Imager to set up a
 login as you go: **Raspberry Pi 4**, **Use custom** → the
 `.img.xz`, then edit the OS customisation: a user and password, SSH (a key
 or password), Wi-Fi if you use it. The hostname is `deck` unless you set
-another there. The image has no user, password or keys of its own; without
-a user from Imager, first boot shows Raspberry Pi OS's own "create a user"
-dialog on the screen (it needs a keyboard) before the deck. First boot grows
-the filesystem to fill the card and applies the customisation (it may
-restart once), then the deck starts.
+another there. The image has no user, password or keys of its own, and
+never asks for one on screen: Raspberry Pi OS's "create a user" dialog is
+off, so no keyboard is ever needed. The deck runs as its own user either
+way; a login is only for SSH. First boot grows the filesystem to fill the
+card and applies the customisation (it may restart once), then the deck
+starts.
 
 ### With deck-flash
 
@@ -79,8 +80,15 @@ its name before erasing it; checks the image's SHA-256 first, writes with a
 progress bar, reads the card back to prove it matches, and ejects it. It
 asks for your password (sudo) only for the write. It reads the card's
 `deck-image.txt` to tell you which build it holds and whether that's the
-image you have here, and whether the card has booted on a Pi yet. It doesn't
-set up a login: use Imager for that, or a keyboard at first boot.
+image you have here, and whether the card has booted on a Pi yet.
+
+It also sets up your login, with no keyboard and no password: your user
+name here and your SSH public key (`~/.ssh/id_ed25519.pub` or similar),
+SSH switched on, hostname `deck`. After first boot, `ssh you@deck.local`.
+It's written to the card's boot partition for Raspberry Pi OS's cloud-init
+to apply; `--user`, `--key`, `--hostname` change it, `--no-login` skips
+it, and `deck-flash login` adds or replaces it on a card that's already
+flashed (applied at its next boot, booted before or not).
 
 Already set up in the image: the deck at `/opt/deck/bin/deck`, starting at
 boot, `/etc/deck/deck.env` with `--device hifiberry --buffer 128`, the

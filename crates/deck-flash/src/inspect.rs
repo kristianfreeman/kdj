@@ -13,9 +13,9 @@ pub enum Contents {
     /// No partitions.
     Empty,
     /// The deck's image; `info` from its deck-image.txt.
-    Deck { info: BTreeMap<String, String>, booted: Booted },
+    Deck { info: BTreeMap<String, String>, booted: Booted, login: Login },
     /// Raspberry Pi OS without the deck; `release` from issue.txt.
-    RaspberryPiOs { release: String, booted: Booted },
+    RaspberryPiOs { release: String, booted: Booted, login: Login },
     /// Partitions, but nothing we recognise.
     Other,
     /// A boot partition we couldn't look inside.
@@ -24,6 +24,14 @@ pub enum Contents {
 
 /// Whether the Pi has started from the card yet: its first boot grows the
 /// system partition to fill the card.
+/// How you'd log in to a card's Pi, as its boot partition says.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Login {
+    pub found: crate::login::Found,
+    /// SSH is switched on at next boot (the `ssh` file is there).
+    pub ssh: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Booted {
     Yes,
@@ -48,22 +56,24 @@ pub fn inspect(disk: &Disk) -> Contents {
 }
 
 fn read(dir: &Path, booted: Booted) -> Contents {
+    let login = || Login { found: crate::login::found(dir), ssh: dir.join("ssh").exists() };
     if let Ok(text) = std::fs::read_to_string(dir.join("deck-image.txt")) {
-        return Contents::Deck { info: key_values(&text), booted };
+        return Contents::Deck { info: key_values(&text), booted, login: login() };
     }
     if dir.join("config.txt").exists() && dir.join("cmdline.txt").exists() {
         let release = std::fs::read_to_string(dir.join("issue.txt"))
             .ok()
             .and_then(|t| t.lines().next().map(str::to_owned))
             .unwrap_or_else(|| "Raspberry Pi OS".into());
-        // A deck installed with setup.sh rather than flashed.
+        // The deck without a build marker: installed with setup.sh, or an
+        // image from before the marker.
         let config = std::fs::read_to_string(dir.join("config.txt")).unwrap_or_default();
         if config.contains("# --- deck:") {
             let mut info = BTreeMap::new();
-            info.insert("image".into(), "installed with deploy/pi/setup.sh".into());
-            return Contents::Deck { info, booted };
+            info.insert("image".into(), "an earlier image, or setup.sh".into());
+            return Contents::Deck { info, booted, login: login() };
         }
-        return Contents::RaspberryPiOs { release, booted };
+        return Contents::RaspberryPiOs { release, booted, login: login() };
     }
     Contents::Other
 }

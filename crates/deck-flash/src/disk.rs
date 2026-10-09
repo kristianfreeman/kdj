@@ -122,6 +122,30 @@ pub fn peek_mount(disk: &Disk) -> Option<(PathBuf, bool)> {
     platform::mount_read_only(p).map(|m| (m, true))
 }
 
+/// Mount the boot partition of disk `id` writable, waiting a little for the
+/// OS to see a partition table just written. Returns where, and whether we
+/// mounted it (and should unmount it after).
+///
+/// # Errors
+/// If it doesn't show up or won't mount.
+pub fn mount_boot_rw(id: &str) -> Result<(PathBuf, bool)> {
+    for _ in 0..30 {
+        platform::reprobe(id);
+        if let Ok(d) = find(id)
+            && let Some(p) = d.boot_partition()
+        {
+            if let Some(m) = &p.mount {
+                return Ok((m.clone(), false));
+            }
+            if let Some(m) = platform::mount_rw(p) {
+                return Ok((m, true));
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    bail!("the card's boot partition didn't mount")
+}
+
 /// Undo `peek_mount`.
 pub fn peek_unmount(path: &std::path::Path) {
     platform::unmount_path(path);
@@ -221,7 +245,23 @@ mod platform {
         // Every physical disk: a MacBook's built-in SD slot counts as internal.
         let all = plist(&["list", "-plist", "physical"])?;
         let system = system_partitions();
-        let entries = get(&all, "AllDisksAndPartitions").and_then(Value::as_array).cloned().unwrap_or_default();
+        let mut entries = get(&all, "AllDisksAndPartitions").and_then(Value::as_array).cloned().unwrap_or_default();
+        // For testing: attached disk images (RAM disks, .dmg) too, and
+        // nothing else virtual (never APFS containers).
+        if std::env::var_os("DECK_FLASH_DISK_IMAGES").is_some() {
+            let virt = plist(&["list", "-plist", "virtual"])?;
+            let images = get(&virt, "AllDisksAndPartitions").and_then(Value::as_array).cloned().unwrap_or_default();
+            entries.extend(images.into_iter().filter(|e| {
+                let id = text(e, "DeviceIdentifier");
+                // Never macOS's own images (simulator runtimes, backups):
+                // nothing with a Mac filesystem on it.
+                let mac = get(e, "Partitions")
+                    .and_then(Value::as_array)
+                    .is_some_and(|ps| ps.iter().any(|p| text(p, "Content").starts_with("Apple_")))
+                    || text(e, "Content").starts_with("Apple_");
+                !mac && plist(&["info", "-plist", id]).is_ok_and(|i| text(&i, "BusProtocol") == "Disk Image")
+            }));
+        }
         let mut disks = Vec::new();
         for e in &entries {
             let id = text(e, "DeviceIdentifier").to_owned();
@@ -279,6 +319,18 @@ mod platform {
 
     pub fn format(disk: &Disk, name: &str) -> Result<()> {
         run("diskutil", &["eraseDisk", "FAT32", name, "MBRFormat", &format!("/dev/{}", disk.id)]).map(drop)
+    }
+
+    /// Ask macOS to look at the disk again (after a raw write) and mount it.
+    pub fn reprobe(id: &str) {
+        let _ = run_for("diskutil", &["mountDisk", &format!("/dev/{id}")], ASK);
+    }
+
+    pub fn mount_rw(p: &Partition) -> Option<PathBuf> {
+        run_for("diskutil", &["mount", &p.id], ASK).ok()?;
+        let info = plist(&["info", "-plist", &p.id]).ok()?;
+        let m = text(&info, "MountPoint");
+        (!m.is_empty()).then(|| PathBuf::from(m))
     }
 
     pub fn mount_read_only(p: &Partition) -> Option<PathBuf> {
@@ -403,6 +455,25 @@ mod platform {
         let _ = run("partprobe", &[&dev]);
         let part = if dev.ends_with(|c: char| c.is_ascii_digit()) { format!("{dev}p1") } else { format!("{dev}1") };
         run("mkfs.vfat", &["-F", "32", "-n", name, &part]).context("mkfs.vfat (install dosfstools)").map(drop)
+    }
+
+    /// Re-read the partition table after a raw write.
+    pub fn reprobe(id: &str) {
+        let _ = run("partprobe", &[&format!("/dev/{id}")]);
+    }
+
+    pub fn mount_rw(p: &Partition) -> Option<PathBuf> {
+        let dev = format!("/dev/{}", p.id);
+        // SAFETY: geteuid has no preconditions and can't fail.
+        if unsafe { libc::geteuid() } == 0 {
+            let dir = std::env::temp_dir().join(format!("deck-flash-{}", p.id));
+            std::fs::create_dir_all(&dir).ok()?;
+            run("mount", &[&dev, &dir.to_string_lossy()]).ok()?;
+            return Some(dir);
+        }
+        let out = run("udisksctl", &["mount", "-b", &dev]).ok()?;
+        let s = String::from_utf8_lossy(&out);
+        s.rsplit(" at ").next().map(|m| PathBuf::from(m.trim().trim_end_matches('.')))
     }
 
     pub fn mount_read_only(p: &Partition) -> Option<PathBuf> {

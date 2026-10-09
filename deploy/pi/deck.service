@@ -4,9 +4,6 @@ Description=deck DJ player
 # As early as the sound card and the display can be there. Not waiting for
 # the network: Ableton Link picks up interfaces as they come up.
 After=local-fs.target systemd-udev-trigger.service sound.target
-# Raspberry Pi OS's first-boot user dialog (if Imager didn't set a user)
-# needs the screen first.
-After=userconfig.service
 # The deck owns the screen: no login prompt on it.
 Conflicts=getty@tty1.service
 After=getty@tty1.service
