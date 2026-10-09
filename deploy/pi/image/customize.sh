@@ -214,15 +214,18 @@ UNIT
     cat >"$probe/kdj-probe" <<'PROBE'
 #!/bin/sh
 sleep 12
-for u in kdj.service getty@tty1.service autovt@tty1.service bluetooth.service \
+for u in kdj.service kdj-name.service userconfig.service getty@tty1.service autovt@tty1.service bluetooth.service \
     apt-daily.timer apt-daily-upgrade.timer man-db.timer e2scrub_all.timer \
     dpkg-db-backup.timer NetworkManager-wait-online.service \
     systemd-networkd-wait-online.service NetworkManager.service; do
     echo "probe: is-enabled $u $(systemctl is-enabled "$u" 2>&1)"
 done
 echo "probe: getty@tty1 $(systemctl is-active getty@tty1.service)"
+echo "probe: hostname $(hostname)"
+journalctl -b -u kdj-name.service -o cat --no-pager | grep 'this Pi is' | sed 's/^/probe: /'
 echo "probe: kdj $(systemctl show kdj.service -p ActiveState -p SubState -p NRestarts | tr '\n' ' ')"
-journalctl -b -u kdj.service -o cat --no-pager | grep -v '^ALSA lib' | tail -n 4 | sed 's/^/probe: journal: /'
+echo "probe: (a container has no screen or sound card, so kdj can't start here: what's checked is that it keeps retrying)"
+journalctl -b -u kdj.service -o cat --no-pager | grep -v '^ALSA lib' | tail -n 2 | sed 's/^/probe:   /'
 echo "probe: sudo $(sudo -n -l -U kdj 2>/dev/null | tail -n 1)"
 echo "probe: done"
 systemctl poweroff
@@ -244,6 +247,11 @@ PROBE
         if grep -q "^probe: is-enabled $u\.[a-z]* enabled$" "$log"; then bad=1; echo "$u enabled after first boot" >&2; fi
     done
     grep -q '^probe: is-enabled autovt@tty1.service masked$' "$log" || bad=1
+    # Never a keyboard: no "create a user" dialog.
+    grep -q '^probe: is-enabled userconfig.service masked$' "$log" || { bad=1; echo "userconfig not masked" >&2; }
+    # Named itself, as a Pi nobody named does on first boot.
+    grep -q '^probe: is-enabled kdj-name.service enabled$' "$log" || bad=1
+    grep -Eq '^probe: hostname kdj-[a-z]+-[a-z]+$' "$log" || { bad=1; echo "didn't name itself" >&2; }
     grep -q '^probe: getty@tty1 active$' "$log" && bad=1
     # Restarted (it has no sound card here) and still going: no start limit.
     grep -Eq '^probe: kdj .*NRestarts=([3-9]|[1-9][0-9])' "$log" || bad=1
