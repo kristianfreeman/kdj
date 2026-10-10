@@ -243,6 +243,8 @@ fn settings_stories(book: &mut Book) -> Result<()> {
         sample_rate: 48_000,
         link_peers: Some(1),
         controller: "XONE:K3 · connected".into(),
+        deck: 0,
+        decks: "kdj-oak-pike B (controller)".into(),
         audio_errors: 0,
     };
     let fresh = || Settings::new(settings::pages(&Prefs::default(), &info));

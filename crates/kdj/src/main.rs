@@ -2,14 +2,16 @@
 //! 800×480 screen, with a full-screen browser for the Rekordbox library.
 //!
 //!   deck [TRACK] [--decks 2] [--fullscreen] [--buffer FRAMES] [--device NAME] [--keymap FILE]
-//!        [--hud] [--midi FILE] [--midi-port NAME] [--no-link]
+//!        [--hud] [--midi FILE] [--midi-port NAME] [--no-link] [--deck LETTER]
 //!   deck --midi-learn FILE [--midi-port NAME]  (write a MIDI mapping by touching each control)
 //!   deck --synth            (a synthetic techno track, no file needed)
 //!
 //! `--device` picks the audio output whose name contains NAME (the default
 //! output otherwise); `--midi-port` picks the MIDI input the same way,
 //! overriding the mapping file's `port`; `--no-link` stays out of Ableton
-//! Link sessions.
+//! Link sessions. `--deck B` makes this deck B among the kdjs on the network
+//! (else it takes the first letter free); a controller plugged into any of
+//! them plays each deck from its side of the mapping (see `net`).
 //!
 //! With no track it opens in the browser: sources, then playlists, then
 //! tracks (↵ opens or loads, ← backs out, Tab closes). Dropping a file on the
@@ -24,6 +26,7 @@ mod leds;
 #[cfg(feature = "link")]
 mod link;
 mod midi;
+mod net;
 mod rt;
 mod touch;
 
@@ -71,6 +74,8 @@ struct Args {
     device: Option<String>,
     /// Don't join Ableton Link sessions.
     no_link: bool,
+    /// This kdj's (first) deck among those on the network: 0 = A.
+    deck: Option<usize>,
 }
 
 fn parse_args() -> Result<Args> {
@@ -87,6 +92,7 @@ fn parse_args() -> Result<Args> {
         midi_port: None,
         device: None,
         no_link: false,
+        deck: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -103,11 +109,20 @@ fn parse_args() -> Result<Args> {
             "--midi-port" => a.midi_port = Some(value()?),
             "--device" => a.device = Some(value()?),
             "--no-link" => a.no_link = true,
+            "--deck" => a.deck = Some(deck_letter(&value()?)?),
             s if s.starts_with("--") => return Err(anyhow!("unknown option {s}")),
             s => a.track = Some(s.into()),
         }
     }
     Ok(a)
+}
+
+/// "A"–"D" (or "a"–"d") as a deck index.
+fn deck_letter(s: &str) -> Result<usize> {
+    match s.to_ascii_uppercase().as_bytes() {
+        &[c @ b'A'..=b'D'] => Ok(usize::from(c - b'A')),
+        _ => Err(anyhow!("--deck is a letter, A to {}", net::letters(net::MAX_DECKS - 1..net::MAX_DECKS))),
+    }
 }
 
 /// A finished background load, tagged with its deck and where in the browser
@@ -249,6 +264,11 @@ struct App {
     load_tx: mpsc::Sender<Loaded>,
     sample_rate: u32,
     status: String,
+    /// This kdj among the others on the network.
+    net: Option<Arc<net::Net>>,
+    /// The network's `epoch` the screen last showed, and the deck letter the
+    /// settings last showed (a change there is a tap).
+    net_shown: (u64, usize),
 }
 
 impl App {
@@ -370,10 +390,36 @@ impl App {
         self.focus = i;
         self.shared_focus.store(i, Ordering::Relaxed);
         self.browser.loaded = self.slots[i].loaded_id;
+        self.label_decks();
+    }
+
+    /// Each deck's letter on screen, once there's more than one deck here or
+    /// on the network.
+    fn label_decks(&mut self) {
         let n = self.slots.len();
-        for ((j, s), letter) in self.slots.iter_mut().enumerate().zip('A'..) {
-            s.ui.view.tag = (n > 1).then_some((letter, j == i));
+        let (first, shared) = self.net.as_ref().map_or((0, false), |net| (net.decks().start, !net.peers().is_empty()));
+        for (j, s) in self.slots.iter_mut().enumerate() {
+            let letter = net::letters(first + j..first + j + 1).chars().next().unwrap_or('A');
+            s.ui.view.tag = (n > 1 || shared).then_some((letter, j == self.focus));
         }
+    }
+
+    /// Keep up with the network: a letter picked in the settings is claimed;
+    /// the screen and settings follow letters and kdjs coming and going.
+    fn follow_net(&mut self) {
+        let Some(net) = self.net.clone() else { return };
+        let (epoch, shown) = self.net_shown;
+        if let Some(picked) = self.settings.choice(settings::Key::Deck).filter(|&d| d != shown) {
+            net.claim(picked);
+        }
+        let deck = net.decks().start;
+        if net.epoch() == epoch && deck == shown {
+            return;
+        }
+        self.net_shown = (net.epoch(), deck);
+        self.settings.set_choice(settings::Key::Deck, deck);
+        self.settings.set_info(settings::Key::Decks, describe_peers(&net.peers()));
+        self.label_decks();
     }
 
     /// Open the highlighted folder or playlist; with `load`, a highlighted
@@ -526,9 +572,11 @@ fn run() -> Result<()> {
         load_tx,
         sample_rate,
         status,
+        net: join_network(&args),
+        net_shown: (u64::MAX, args.deck.unwrap_or(0)),
     };
     app.set_focus(0);
-    let mut midi = start_midi(&args, midi_inputs, &app.shared_focus)?;
+    let mut midi = start_midi(&args, midi_inputs, &app.shared_focus, app.net.clone())?;
     let debug = std::env::var_os("KDJ_DEBUG_INPUT").is_some();
     let mut input = Input { keymap, held: HashMap::new(), touch: touch::Touch::default(), finger: None, debug };
     let mut frames = Frames { started: Instant::now(), loaded: false, snaps: Vec::with_capacity(app.slots.len()) };
@@ -550,6 +598,7 @@ fn run() -> Result<()> {
         for (a, e, deck) in midi.iter().flat_map(|m| m.ui.try_iter()) {
             app.act(a, e, deck);
         }
+        app.follow_net();
         if let Ok(scan) = scan_rx.try_recv() {
             app.take_libraries(scan);
         }
@@ -572,13 +621,37 @@ fn run() -> Result<()> {
 }
 
 /// Start the controller thread if there's a mapping file.
-fn start_midi(args: &Args, inputs: Vec<InputSender>, focus: &Arc<AtomicUsize>) -> Result<Option<midi::Midi>> {
+fn start_midi(
+    args: &Args,
+    inputs: Vec<InputSender>,
+    focus: &Arc<AtomicUsize>,
+    net: Option<Arc<net::Net>>,
+) -> Result<Option<midi::Midi>> {
     let Some(path) = &args.midi else { return Ok(None) };
     let (map, mut cfg) = MidiMap::from_toml(&std::fs::read_to_string(path)?)?;
     if args.midi_port.is_some() {
         cfg.port.clone_from(&args.midi_port);
     }
-    Ok(Some(midi::start(&cfg, map, inputs, Arc::clone(focus))))
+    Ok(Some(midi::start(&cfg, map, inputs, Arc::clone(focus), net)))
+}
+
+/// Say hello to the other kdjs on the network, to share a controller.
+fn join_network(args: &Args) -> Option<Arc<net::Net>> {
+    net::Net::start(hostname(), args.decks, args.deck)
+        .map_err(|e| eprintln!("net: can't share a controller with other kdjs: {e}"))
+        .ok()
+}
+
+/// The other kdjs, for the settings: "kdj-oak-pike B (controller)".
+fn describe_peers(peers: &[net::PeerInfo]) -> String {
+    if peers.is_empty() {
+        return "None found".into();
+    }
+    let each = peers.iter().map(|p| {
+        let plugged = if p.controller { " (controller)" } else { "" };
+        format!("{} {}{plugged}", p.name, net::letters(p.decks.clone()))
+    });
+    each.collect::<Vec<_>>().join(", ")
 }
 
 /// Reports what the audio side counted (it can't print from the callback).
@@ -647,6 +720,8 @@ fn system_info(args: &Args, output: &str, sample_rate: u32) -> settings::SystemI
         sample_rate,
         link_peers: None,
         controller,
+        deck: args.deck.unwrap_or(0),
+        decks: "None found".into(),
         audio_errors: 0,
     }
 }

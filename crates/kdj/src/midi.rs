@@ -8,6 +8,8 @@
 //! Each message is decoded by the
 //! `MidiMap`; deck actions go straight into that deck's engine queue without
 //! waiting for a screen frame, and browser/screen actions go to the UI thread.
+//! A control for a deck another kdj holds goes to it across the network (see
+//! `net`), and controls from another kdj's controller come in the same way.
 //!
 //! `deck --midi-learn FILE` writes a mapping by asking for each control in turn.
 
@@ -22,10 +24,30 @@ use anyhow::{Context, Result, anyhow};
 use kdj_engine::midimap::{Binding, Encoding, Event, FaderKind, Hit, MidiConfig, MidiMap, Target};
 use kdj_engine::{Action, Edge, InputSender};
 use midir::{MidiInput, MidiInputConnection, MidiInputPort};
+
+use crate::net::{self, Net};
 use serde::Serialize;
 
 /// A UI-side action from the controller: (action, edge, deck).
 pub type UiAction = (Action, Edge, usize);
+
+/// Where a message came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Origin {
+    /// The controller plugged in here.
+    Controller,
+    /// Another kdj's controller, for a deck here.
+    Network,
+}
+
+/// Where a control's deck is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Route {
+    /// Here: index into this kdj's decks.
+    Here(usize),
+    /// On another kdj: which deck (0 = A).
+    Away(usize),
+}
 
 /// Everything a message needs to reach its destination.
 struct Dispatch {
@@ -35,6 +57,9 @@ struct Dispatch {
     decks: Vec<InputSender>,
     ui: mpsc::Sender<UiAction>,
     focus: Arc<AtomicUsize>,
+    net: Option<Arc<Net>>,
+    /// The deck last found to have nobody, to say so once.
+    nobody: Option<usize>,
 }
 
 impl Dispatch {
@@ -44,6 +69,7 @@ impl Dispatch {
         decks: Vec<InputSender>,
         ui: mpsc::Sender<UiAction>,
         focus: Arc<AtomicUsize>,
+        net: Option<Arc<Net>>,
     ) -> Self {
         // Mirrors `MidiMap::new`: later bindings replace earlier ones.
         let encoders = cfg
@@ -51,7 +77,7 @@ impl Dispatch {
             .iter()
             .filter_map(|b| Some(((b.channel.map(|c| c.saturating_sub(1)), b.cc?), b.up.is_some())))
             .collect();
-        Self { map, encoders, decks, ui, focus }
+        Self { map, encoders, decks, ui, focus, net, nobody: None }
     }
 
     /// Whether `msg` comes from an encoder (looked up the way `MidiMap`
@@ -65,31 +91,58 @@ impl Dispatch {
         self.encoders.get(&(Some(channel), cc)).or_else(|| self.encoders.get(&(None, cc))).copied().unwrap_or(false)
     }
 
-    fn handle(&mut self, msg: &[u8]) {
-        match self.map.decode(msg) {
-            Some(Event::Hit(hit)) => self.hit(hit, self.is_encoder(msg)),
-            Some(Event::Fader { kind: FaderKind::Tempo, position, target }) => {
-                let deck = self.deck(target);
+    fn handle(&mut self, msg: &[u8], from: Origin) {
+        let Some(event) = self.map.decode(msg) else { return };
+        let target = match event {
+            Event::Hit(h) => h.target,
+            Event::Fader { target, .. } => target,
+        };
+        let deck = match (self.route(target), from) {
+            (Route::Here(deck), _) => deck,
+            (Route::Away(deck), Origin::Controller) => {
+                self.send_away(deck, msg);
+                return;
+            }
+            // Another kdj sent us a control that isn't ours (its mapping
+            // differs, or a letter just moved): leave it.
+            (Route::Away(_), Origin::Network) => return,
+        };
+        // The focused deck is this kdj's own business.
+        if from == Origin::Network && target == Target::Focused {
+            return;
+        }
+        match event {
+            Event::Hit(hit) => self.hit(hit, deck, self.is_encoder(msg)),
+            Event::Fader { kind: FaderKind::Tempo, position, .. } => {
                 if let Some(engine) = self.decks.get_mut(deck) {
                     engine.tempo_fader(position);
                 }
             }
-            None => {}
         }
     }
 
-    /// Which deck a control drives.
-    fn deck(&self, target: Target) -> usize {
-        let last = self.decks.len().saturating_sub(1);
+    /// Where a control's deck is. Without the network, decks from A.
+    fn route(&self, target: Target) -> Route {
+        let here = self.net.as_ref().map_or(0..self.decks.len(), |n| n.decks());
         match target {
-            Target::Focused => self.focus.load(Ordering::Relaxed),
-            Target::Deck(d) => d,
+            Target::Focused => Route::Here(self.focus.load(Ordering::Relaxed).min(self.decks.len().saturating_sub(1))),
+            Target::Deck(d) if here.contains(&d) => Route::Here(d - here.start),
+            Target::Deck(d) => Route::Away(d),
         }
-        .min(last)
     }
 
-    fn hit(&mut self, hit: Hit, encoder: bool) {
-        let deck = self.deck(hit.target);
+    /// Send a control to the kdj that's deck `deck`, saying once if there's none.
+    fn send_away(&mut self, deck: usize, msg: &[u8]) {
+        let sent = self.net.as_ref().is_some_and(|n| n.send_midi(deck, msg));
+        if sent {
+            self.nobody = None;
+        } else if self.nobody != Some(deck) {
+            eprintln!("midi: no kdj is deck {} for that control", net::letters(deck..deck + 1));
+            self.nobody = Some(deck);
+        }
+    }
+
+    fn hit(&mut self, hit: Hit, deck: usize, encoder: bool) {
         for _ in 0..hit.repeat {
             if hit.action.is_ui() {
                 let _ = self.ui.send((hit.action, hit.edge, deck));
@@ -113,17 +166,29 @@ pub struct Midi {
     pub leds: Option<crate::leds::Leds>,
 }
 
-/// Start the controller thread.
-pub fn start(cfg: &MidiConfig, map: MidiMap, decks: Vec<InputSender>, focus: Arc<AtomicUsize>) -> Midi {
+/// Start the controller thread. With `net`, controls for decks on other
+/// kdjs go to them, and theirs come here.
+pub fn start(
+    cfg: &MidiConfig,
+    map: MidiMap,
+    decks: Vec<InputSender>,
+    focus: Arc<AtomicUsize>,
+    net: Option<Arc<Net>>,
+) -> Midi {
     let (ui_tx, ui_rx) = mpsc::channel();
-    let dispatch = Arc::new(Mutex::new(Dispatch::new(cfg, map, decks, ui_tx, focus)));
+    let dispatch = Arc::new(Mutex::new(Dispatch::new(cfg, map, decks, ui_tx, focus, net.clone())));
+    if let Some(n) = &net {
+        let d = Arc::clone(&dispatch);
+        n.on_midi(Box::new(move |msg| d.lock().unwrap_or_else(PoisonError::into_inner).handle(msg, Origin::Network)));
+    }
     let wanted = cfg.port.clone();
+    let n = net.clone();
     std::thread::Builder::new()
         .name("midi".into())
-        .spawn(move || keep_connected(wanted.as_deref(), &dispatch))
+        .spawn(move || keep_connected(wanted.as_deref(), &dispatch, n.as_deref()))
         .map_err(|e| eprintln!("midi: couldn't start: {e}"))
         .ok();
-    Midi { ui: ui_rx, leds: crate::leds::Leds::new(cfg) }
+    Midi { ui: ui_rx, leds: crate::leds::Leds::new(cfg, net) }
 }
 
 /// A port as last seen: its full name (on ALSA ending in "client:port") and
@@ -143,7 +208,7 @@ struct Found {
 }
 
 /// Connect when the port shows up; drop the connection when it goes away.
-fn keep_connected(wanted: Option<&str>, dispatch: &Arc<Mutex<Dispatch>>) {
+fn keep_connected(wanted: Option<&str>, dispatch: &Arc<Mutex<Dispatch>>, net: Option<&Net>) {
     let mut conn: Option<(Seen, MidiInputConnection<()>)> = None;
     let mut waiting = false;
     let mut last_error = None;
@@ -182,6 +247,9 @@ fn keep_connected(wanted: Option<&str>, dispatch: &Arc<Mutex<Dispatch>>) {
                 None => {}
             }
         }
+        if let Some(n) = net {
+            n.set_controller(conn.is_some());
+        }
         std::thread::sleep(Duration::from_secs(1));
     }
 }
@@ -190,7 +258,7 @@ fn connect(found: Found, dispatch: &Arc<Mutex<Dispatch>>) -> Option<(Seen, MidiI
     let Found { input, port, seen } = found;
     let d = Arc::clone(dispatch);
     let callback = move |_stamp: u64, msg: &[u8], (): &mut ()| {
-        d.lock().unwrap_or_else(PoisonError::into_inner).handle(msg);
+        d.lock().unwrap_or_else(PoisonError::into_inner).handle(msg, Origin::Controller);
     };
     match input.connect(&port, "kdj", callback, ()) {
         Ok(c) => {
@@ -478,13 +546,36 @@ mod tests {
             [[midi.map]]\ncc = 2\naction = \"Cue\"\n\
             [[midi.map]]\ncc = 2\nchannel = 3\nup = \"TempoUp\"\ndown = \"TempoDown\"\n";
         let (map, cfg) = MidiMap::from_toml(src)?;
-        let d = Dispatch::new(&cfg, map, Vec::new(), mpsc::channel().0, Arc::new(AtomicUsize::new(0)));
+        let d = Dispatch::new(&cfg, map, Vec::new(), mpsc::channel().0, Arc::new(AtomicUsize::new(0)), None);
         assert!(d.is_encoder(&[0xb0, 1, 1]));
         assert!(!d.is_encoder(&[0xb0, 2, 127]));
         // Channel 3's own binding wins over the any-channel one.
         assert!(d.is_encoder(&[0xb2, 2, 1]));
         assert!(!d.is_encoder(&[0x90, 1, 100]));
         assert!(!d.is_encoder(&[0xb0, 9, 1]));
+        Ok(())
+    }
+
+    #[test]
+    fn controls_for_decks_elsewhere_stay_off_this_one() -> Result<()> {
+        let src = "[midi]\n\
+            [[midi.map]]\nnote = 1\naction = \"BrowseLoad\"\ndeck = 0\n\
+            [[midi.map]]\nnote = 2\naction = \"BrowseLoad\"\ndeck = 1\n\
+            [[midi.map]]\nnote = 3\naction = \"BrowseLoad\"\n";
+        let (map, cfg) = MidiMap::from_toml(src)?;
+        let (_engine, _handle, senders) = Engine::new(EngineConfig { extra_inputs: 1, ..EngineConfig::default() });
+        let (tx, rx) = mpsc::channel();
+        let mut d = Dispatch::new(&cfg, map, senders, tx, Arc::new(AtomicUsize::new(0)), None);
+        let mut got = |msg: &[u8], from| {
+            d.handle(msg, from);
+            rx.try_iter().map(|(a, _, deck)| (a, deck)).collect::<Vec<_>>()
+        };
+        assert_eq!(got(&[0x90, 1, 127], Origin::Controller), [(Action::BrowseLoad, 0)], "deck A is here");
+        assert_eq!(got(&[0x90, 2, 127], Origin::Controller), [], "deck B is another kdj's (none here)");
+        assert_eq!(got(&[0x90, 3, 127], Origin::Controller), [(Action::BrowseLoad, 0)], "the focused deck");
+        assert_eq!(got(&[0x90, 1, 127], Origin::Network), [(Action::BrowseLoad, 0)], "sent here for deck A");
+        assert_eq!(got(&[0x90, 2, 127], Origin::Network), [], "not ours, and never sent on");
+        assert_eq!(got(&[0x90, 3, 127], Origin::Network), [], "focus is this kdj's own business");
         Ok(())
     }
 
@@ -504,7 +595,7 @@ mod tests {
         let mut out = vec![0.0; 256];
         engine.process(&mut out);
         let before = handle.snapshot().quantize;
-        let _midi = start(&cfg, map, senders, Arc::new(AtomicUsize::new(0)));
+        let _midi = start(&cfg, map, senders, Arc::new(AtomicUsize::new(0)), None);
 
         // The controller thread polls for the port once a second.
         let deadline = Instant::now() + Duration::from_secs(5);

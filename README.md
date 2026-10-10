@@ -123,6 +123,18 @@ it reaches the deck's tempo, so after SYNC or a tempo button nothing
 jumps; until then the screen shows where it is as a hollow marker beside
 the tempo. SYNC owns the tempo while it's on.
 
+### One controller, two Pis
+
+Each Pi is one deck, with its own output into its own mixer channel. They
+find each other on the network and take a deck letter each (the first free
+one, or `--deck B`; Settings → Sync → This deck changes it), shown beside
+the track title. A mapping's `deck = 0` controls play deck A and `deck = 1`
+deck B, whichever Pi the controller is plugged into: controls for the other
+deck go to it across the network as they are, and its LEDs come back the
+same way. `config/xone-k3.toml` splits a K3 down the middle, the same layout
+on each side; alone, a Pi plays from the left half (or the right, as B).
+The network wants to be wired: Wi-Fi adds latency to every press.
+
 ## Raspberry Pi
 
 [`deploy/pi`](deploy/pi/README.md) turns Raspberry Pi OS Lite into a deck:

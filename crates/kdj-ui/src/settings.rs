@@ -46,6 +46,10 @@ pub enum Key {
     Link,
     LinkPeers,
     SyncAlign,
+    /// This kdj's deck letter, shared with the other kdjs on the network.
+    Deck,
+    /// The other kdjs on the network.
+    Decks,
     Controller,
     LedColour,
     Learn,
@@ -185,6 +189,26 @@ impl Settings {
             Value::Choice { selected, .. } => Some(selected),
             _ => None,
         })
+    }
+
+    /// Show `option` as `key`'s choice (the app changed it, not a tap).
+    pub fn set_choice(&mut self, key: Key, option: usize) {
+        if let Some(Value::Choice { options, selected }) = self.value_mut(key)
+            && option < options.len()
+        {
+            *selected = option;
+        }
+    }
+
+    /// Change what `key`'s read-only row says.
+    pub fn set_info(&mut self, key: Key, text: String) {
+        if let Some(Value::Info(s)) = self.value_mut(key) {
+            *s = text;
+        }
+    }
+
+    fn value_mut(&mut self, key: Key) -> Option<&mut Value> {
+        self.pages.iter_mut().flat_map(|p| &mut p.rows).find(|r| r.key == key).map(|r| &mut r.value)
     }
 
     fn rows(&self) -> &[Row] {
@@ -369,6 +393,10 @@ pub struct SystemInfo {
     pub link_peers: Option<u32>,
     /// The controller's name, or how the search for it is going.
     pub controller: String,
+    /// This kdj's deck letter (0 = A).
+    pub deck: usize,
+    /// The other kdjs on the network.
+    pub decks: String,
     pub audio_errors: u64,
 }
 
@@ -470,6 +498,13 @@ fn sync(p: &Prefs, info: &SystemInfo) -> Vec<Row> {
             "On engaging SYNC: the bars (4 beats), or just the nearest beat.",
             choice(&["Beats", "Bars"], usize::from(p.bar_sync)),
         ),
+        row(
+            Key::Deck,
+            "This deck",
+            "Its letter: a controller's deck A side plays deck A, wherever it's plugged in.",
+            choice(&["A", "B", "C", "D"], info.deck),
+        ),
+        row(Key::Decks, "Other decks", "Other kdjs on the network, by letter.", Value::Info(info.decks.clone())),
     ]
 }
 

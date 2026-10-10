@@ -18,6 +18,7 @@ rtrb = "0.4.0"
 rusty_link = { version = "0.4.9", optional = true }
 sdl2 = { version = "0.38.0", features = ["use-pkgconfig"] }
 serde = { version = "1.0.229", features = ["derive"] }
+socket2 = { version = "0.6.5", features = ["all"] }
 toml = "1.1.8"
 
 [target.'cfg(unix)'.dependencies]
