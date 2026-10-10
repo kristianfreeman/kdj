@@ -68,7 +68,7 @@ pub fn load_file(path: &Path, sample_rate: u32) -> Result<(Track, LoadTimings)> 
 /// If the beat-grid thread panics; the panic is passed on.
 pub fn load_file_known(path: &Path, sample_rate: u32, known: Known) -> Result<(Track, LoadTimings)> {
     let t = Instant::now();
-    let decoded = decode::decode(path, frame_budget())?;
+    let decoded = decode::decode(path, frame_budget(known.grid.is_none()))?;
     let mut timings = LoadTimings { decode: t.elapsed(), ..Default::default() };
     let src_rate = decoded.sample_rate;
     // The grid runs on mono at the file's rate; the stereo samples move on
@@ -118,36 +118,42 @@ pub fn load_file_known(path: &Path, sample_rate: u32, known: Known) -> Result<(T
 }
 
 /// Bytes of memory a load needs per source frame at its peak: the decoded
-/// stereo (8), the grid's mono copy (4), the resampled stereo (8, a little
-/// more when upsampling), the waveform and slack.
+/// stereo (8) and the resampled stereo (8, about 9 from 44.1 to 48 kHz),
+/// plus slack.
 #[cfg(any(target_os = "linux", test))]
-const LOAD_BYTES_PER_FRAME: u64 = 24;
+const LOAD_BYTES_PER_FRAME: u64 = 18;
+/// What finding our own beat grid adds: its mono copy (a Rekordbox track
+/// brings its grid, so skips it).
+#[cfg(any(target_os = "linux", test))]
+const GRID_BYTES_PER_FRAME: u64 = 4;
 /// Memory left for everything else while a track loads.
 #[cfg(any(target_os = "linux", test))]
-const LOAD_HEADROOM_BYTES: u64 = 256 << 20;
+const LOAD_HEADROOM_BYTES: u64 = 96 << 20;
 
 /// How many frames of audio a load can take without running out of memory:
 /// on Linux (the Pi, where memory is locked and can't swap), from what's
 /// available now; elsewhere unlimited.
+/// `with_grid`: the load finds its own beat grid (it needs more).
 #[cfg(target_os = "linux")]
 #[must_use]
-pub fn frame_budget() -> Option<usize> {
-    budget_from_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
+pub fn frame_budget(with_grid: bool) -> Option<usize> {
+    budget_from_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?, with_grid)
 }
 
 #[cfg(not(target_os = "linux"))]
 #[must_use]
-pub const fn frame_budget() -> Option<usize> {
+pub const fn frame_budget(_with_grid: bool) -> Option<usize> {
     None
 }
 
 #[cfg(any(target_os = "linux", test))]
 /// The frame budget from `/proc/meminfo`'s text.
-fn budget_from_meminfo(info: &str) -> Option<usize> {
+fn budget_from_meminfo(info: &str, with_grid: bool) -> Option<usize> {
     let kb: u64 =
         info.lines().find_map(|l| l.strip_prefix("MemAvailable:"))?.trim().strip_suffix("kB")?.trim().parse().ok()?;
     let bytes = kb.saturating_mul(1024).saturating_sub(LOAD_HEADROOM_BYTES);
-    usize::try_from(bytes / LOAD_BYTES_PER_FRAME).ok()
+    let per_frame = LOAD_BYTES_PER_FRAME + if with_grid { GRID_BYTES_PER_FRAME } else { 0 };
+    usize::try_from(bytes / per_frame).ok()
 }
 
 /// Interleaved stereo → mono, for the beat grid.
@@ -199,8 +205,9 @@ mod tests {
     #[test]
     fn the_frame_budget_comes_from_available_memory() {
         let info = "MemTotal:        3884488 kB\nMemFree:          212345 kB\nMemAvailable:    1310720 kB\n";
-        // 1.25 GiB available, 256 MiB kept back, 24 bytes a frame.
-        assert_eq!(super::budget_from_meminfo(info), Some(((1_310_720 << 10) - (256 << 20)) / 24));
-        assert_eq!(super::budget_from_meminfo("MemTotal: 1 kB\n"), None);
+        // 1.25 GiB available, 96 MiB kept back; 18 bytes a frame, 22 with a grid to find.
+        assert_eq!(super::budget_from_meminfo(info, false), Some(((1_310_720 << 10) - (96 << 20)) / 18));
+        assert_eq!(super::budget_from_meminfo(info, true), Some(((1_310_720 << 10) - (96 << 20)) / 22));
+        assert_eq!(super::budget_from_meminfo("MemTotal: 1 kB\n", true), None);
     }
 }

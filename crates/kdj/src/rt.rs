@@ -30,8 +30,13 @@ pub const fn promote_current_thread() -> i32 {
     PROMOTED
 }
 
-/// Lock all memory, now and future, if the limit allows all of it (a lower
-/// limit would make big allocations, like loading a track, fail instead).
+/// Lock memory, now and future, if the limit allows all of it (a lower limit
+/// would make big allocations, like loading a track, fail instead).
+///
+/// Pages are locked as they're first touched (`MCL_ONFAULT`), not all at
+/// once: locking everything up front pulls in every page of every library,
+/// and Mesa's (LLVM, the Gallium drivers) alone are ~200 MB the deck never
+/// runs — a fifth of a 1 GB Pi. What the deck does touch can't be swapped out.
 #[cfg(target_os = "linux")]
 pub fn lock_memory() -> Result<(), String> {
     let mut lim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
@@ -39,8 +44,10 @@ pub fn lock_memory() -> Result<(), String> {
     if unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &raw mut lim) } != 0 || lim.rlim_cur != libc::RLIM_INFINITY {
         return Err("the memlock limit isn't unlimited (LimitMEMLOCK=infinity)".into());
     }
-    // SAFETY: plain syscall with constant flags.
-    if unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE) } != 0 {
+    // SAFETY: plain syscalls with constant flags.
+    let on_fault = unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE | libc::MCL_ONFAULT) };
+    // Kernels before 4.4 don't know MCL_ONFAULT: lock everything, then.
+    if on_fault != 0 && unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE) } != 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
     Ok(())
