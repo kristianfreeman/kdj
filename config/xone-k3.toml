@@ -1,249 +1,316 @@
 # kdj on an Allen & Heath Xone:K3 with its factory map (latching layers
-# off, MIDI channel 15). One deck per K3. Notes from the K3 user guide's
-# "MIDI implementation default"; LEDs answer on the same notes (red; add 36
-# for amber, 72 for green with led_offset).
+# off, MIDI channel 15), split down the middle: the left two columns drive
+# deck A, the right two deck B, the same layout on each side. With two kdj
+# Pis on one network, the K3 plugs into either; each Pi takes a deck letter
+# and the other half's controls (and LEDs) go across the network. Notes from
+# the K3 user guide's "MIDI implementation default"; LEDs answer on the same
+# notes (red; add 36 for amber, 72 for green with led_offset). A column's
+# controls are the one to its left's plus 1, so deck B's are deck A's plus 2.
 #
-#   ┌──────────────────────────────────────────────────────────────┐
-#   │ JOG         TEMPO        LOOP SIZE     BEAT JUMP    encoders │
-#   │ push: KEY   push: RESET  push: LOOP    push: QUANT           │
-#   │ (pots: unused — the mixer does EQ)                           │
-#   │ SYNC        MASTER       RANGE ±8/16   —            row 1    │
-#   │ LOOP 1      LOOP 2       LOOP 4        LOOP 8       row 2    │
-#   │ LOOP 16     LOOP 32      ◀ NUDGE       NUDGE ▶      row 3    │
-#   │ TEMPO fader (towards you: faster)  ·  faders 2–4 unused      │
-#   │ HOT CUE A   B            C             D            grid 1   │
-#   │ HOT CUE E   F            G             H            grid 2   │
-#   │ ◀ JUMP      JUMP ▶       PHASE −2ms    PHASE +2ms   grid 3   │
-#   │ CUE         PLAY         —             —            grid 4   │
-#   │ LAYER:      left enc:    right enc:    SHIFT:                │
-#   │ BROWSE      scroll/LOAD  zoom/SETTINGS BACK                  │
-#   └──────────────────────────────────────────────────────────────┘
+#   ┌───────── deck A ─────────┬───────── deck B ─────────┐
+#   │ JOG          LOOP SIZE   │ JOG          LOOP SIZE   │ encoders
+#   │ push: KEY    push: LOOP  │ push: KEY    push: LOOP  │
+#   │ (pots: unused — the mixer does EQ)                  │
+#   │ SYNC         MASTER      │ SYNC         MASTER      │ row 1
+#   │ ◀ JUMP       JUMP ▶      │ ◀ JUMP       JUMP ▶      │ row 2
+#   │ QUANTIZE     RANGE       │ QUANTIZE     RANGE       │ row 3
+#   │ TEMPO        —           │ TEMPO        —           │ faders
+#   │ HOT CUE A    B           │ HOT CUE A    B           │ grid 1
+#   │ HOT CUE C    D           │ HOT CUE C    D           │ grid 2
+#   │ ◀ NUDGE      NUDGE ▶     │ ◀ NUDGE      NUDGE ▶     │ grid 3
+#   │ CUE          PLAY        │ CUE          PLAY        │ grid 4
+#   │ encoder: browse,         │ SHIFT: BROWSE / BACK     │ bottom
+#   │   push: open / load      │ encoder: browse,         │
+#   │ LAYER: BROWSE / BACK     │   push: open / load      │
+#   └──────────────────────────┴──────────────────────────┘
 
 [midi]
 port = "XONE:K3"
 # Lit LEDs in red (0); 36 for amber, 72 for green.
 led_offset = 0
 
-# --- Top encoders: turn (CC 0–3, two's complement) and push (notes 52–55).
+# ═══ Deck A: columns 1–2 ═══
+
+# --- Encoders (CC 0–1, two's complement; push notes 52–53).
 
 [[midi.map]]
 channel = 15
+deck = 0
 cc = 0
 up = "JogForward"
 down = "JogBack"
 
 [[midi.map]]
 channel = 15
+deck = 0
 note = 52
 action = "KeyLock"
 
 [[midi.map]]
 channel = 15
+deck = 0
 cc = 1
-up = "TempoUp"
-down = "TempoDown"
-
-[[midi.map]]
-channel = 15
-note = 53
-action = "TempoReset"
-
-[[midi.map]]
-channel = 15
-cc = 2
 up = "LoopDouble"
 down = "LoopHalve"
 
 [[midi.map]]
 channel = 15
-note = 54
+deck = 0
+note = 53
 action = "LoopToggle"
 
-[[midi.map]]
-channel = 15
-cc = 3
-up = "BeatJumpForward"
-down = "BeatJumpBack"
+# --- Buttons under the pots: rows 1–3 (notes 48–49, 44–45, 40–41).
 
 [[midi.map]]
 channel = 15
-note = 55
-action = "Quantize"
-
-# --- Buttons under the pots, row 1 (notes 48–50; 51 is free).
-
-[[midi.map]]
-channel = 15
+deck = 0
 note = 48
 action = "Sync"
 
 [[midi.map]]
 channel = 15
+deck = 0
 note = 49
 action = "Master"
 
 [[midi.map]]
 channel = 15
-note = 50
+deck = 0
+note = 44
+action = "BeatJumpBack"
+
+[[midi.map]]
+channel = 15
+deck = 0
+note = 45
+action = "BeatJumpForward"
+
+[[midi.map]]
+channel = 15
+deck = 0
+note = 40
+action = "Quantize"
+
+[[midi.map]]
+channel = 15
+deck = 0
+note = 41
 action = "TempoRange"
 
-# --- Row 2 (notes 44–47): beat loops.
+# --- Fader 1 (CC 16): tempo, soft takeover. Fader 2 (CC 17) unused.
 
 [[midi.map]]
 channel = 15
-note = 44
-action = "BeatLoop1"
-
-[[midi.map]]
-channel = 15
-note = 45
-action = "BeatLoop2"
-
-[[midi.map]]
-channel = 15
-note = 46
-action = "BeatLoop4"
-
-[[midi.map]]
-channel = 15
-note = 47
-action = "BeatLoop8"
-
-# --- Row 3 (notes 40–43): long loops, and nudge (held).
-
-[[midi.map]]
-channel = 15
-note = 40
-action = "BeatLoop16"
-
-[[midi.map]]
-channel = 15
-note = 41
-action = "BeatLoop32"
-
-[[midi.map]]
-channel = 15
-note = 42
-action = "NudgeBack"
-
-[[midi.map]]
-channel = 15
-note = 43
-action = "NudgeForward"
-
-# --- Fader 1 (CC 16): tempo, soft takeover. Faders 2–4 (CC 17–19) unused.
-
-[[midi.map]]
-channel = 15
+deck = 0
 cc = 16
 fader = "Tempo"
 
-# --- Grid row 1 (notes 36–39) and row 2 (32–35): hot cues A–H.
+# --- Grid (notes 36–37, 32–33, 28–29, 24–25): hot cues, nudge, CUE and PLAY.
 
 [[midi.map]]
 channel = 15
+deck = 0
 note = 36
 action = "HotCue1"
 
 [[midi.map]]
 channel = 15
+deck = 0
 note = 37
 action = "HotCue2"
 
 [[midi.map]]
 channel = 15
-note = 38
+deck = 0
+note = 32
 action = "HotCue3"
 
 [[midi.map]]
 channel = 15
-note = 39
+deck = 0
+note = 33
 action = "HotCue4"
 
 [[midi.map]]
 channel = 15
-note = 32
-action = "HotCue5"
-
-[[midi.map]]
-channel = 15
-note = 33
-action = "HotCue6"
-
-[[midi.map]]
-channel = 15
-note = 34
-action = "HotCue7"
-
-[[midi.map]]
-channel = 15
-note = 35
-action = "HotCue8"
-
-# --- Grid row 3 (notes 28–31): beat jump and phase steps.
-
-[[midi.map]]
-channel = 15
+deck = 0
 note = 28
-action = "BeatJumpBack"
+action = "NudgeBack"
 
 [[midi.map]]
 channel = 15
+deck = 0
 note = 29
-action = "BeatJumpForward"
+action = "NudgeForward"
 
 [[midi.map]]
 channel = 15
-note = 30
-action = "PhaseBack"
-
-[[midi.map]]
-channel = 15
-note = 31
-action = "PhaseForward"
-
-# --- Grid row 4 (notes 24–27): CUE and PLAY, bottom left like a CDJ.
-
-[[midi.map]]
-channel = 15
+deck = 0
 note = 24
 action = "Cue"
 
 [[midi.map]]
 channel = 15
+deck = 0
 note = 25
 action = "PlayPause"
 
-# --- Bottom: LAYER (note 12), encoders (CC 20/21, push 13/14), SHIFT (15).
+# --- Bottom left: encoder (CC 20, push 13) and LAYER (note 12).
 
 [[midi.map]]
 channel = 15
-note = 12
-action = "Browse"
-
-[[midi.map]]
-channel = 15
+deck = 0
 cc = 20
 up = "BrowseDown"
 down = "BrowseUp"
 
 [[midi.map]]
 channel = 15
+deck = 0
 note = 13
 action = "BrowseLoad"
 
 [[midi.map]]
 channel = 15
+deck = 0
+note = 12
+action = "BrowseBack"
+
+# ═══ Deck B: columns 3–4, deck A's notes and CCs plus 2 ═══
+
+[[midi.map]]
+channel = 15
+deck = 1
+cc = 2
+up = "JogForward"
+down = "JogBack"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 54
+action = "KeyLock"
+
+[[midi.map]]
+channel = 15
+deck = 1
+cc = 3
+up = "LoopDouble"
+down = "LoopHalve"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 55
+action = "LoopToggle"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 50
+action = "Sync"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 51
+action = "Master"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 46
+action = "BeatJumpBack"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 47
+action = "BeatJumpForward"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 42
+action = "Quantize"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 43
+action = "TempoRange"
+
+[[midi.map]]
+channel = 15
+deck = 1
+cc = 18
+fader = "Tempo"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 38
+action = "HotCue1"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 39
+action = "HotCue2"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 34
+action = "HotCue3"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 35
+action = "HotCue4"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 30
+action = "NudgeBack"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 31
+action = "NudgeForward"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 26
+action = "Cue"
+
+[[midi.map]]
+channel = 15
+deck = 1
+note = 27
+action = "PlayPause"
+
+# --- Bottom right: encoder (CC 21, push 14) and SHIFT (note 15).
+
+[[midi.map]]
+channel = 15
+deck = 1
 cc = 21
-up = "ZoomIn"
-down = "ZoomOut"
+up = "BrowseDown"
+down = "BrowseUp"
 
 [[midi.map]]
 channel = 15
+deck = 1
 note = 14
-action = "Settings"
+action = "BrowseLoad"
 
 [[midi.map]]
 channel = 15
+deck = 1
 note = 15
 action = "BrowseBack"

@@ -364,18 +364,41 @@ mod tests {
     fn the_xone_k3_mapping_matches_the_factory_map() {
         let (m, cfg) = MidiMap::from_toml(include_str!("../../../config/xone-k3.toml")).expect("valid");
         assert_eq!(cfg.port.as_deref(), Some("XONE:K3"));
-        // Channel 15 is status nibble 14. Grid bottom row: CUE, PLAY.
-        assert_eq!(hit(&m, &[0x9e, 24, 127]).map(|h| h.action), Some(Action::Cue));
-        assert_eq!(hit(&m, &[0x9e, 25, 127]).map(|h| h.action), Some(Action::PlayPause));
-        assert_eq!(hit(&m, &[0x9e, 36, 127]).map(|h| h.action), Some(Action::HotCue1));
+        let on = |msg: &[u8]| hit(&m, msg).map(|h| (h.action, h.target));
+        // Channel 15 is status nibble 14. Grid bottom row: CUE, PLAY on each side.
+        assert_eq!(on(&[0x9e, 24, 127]), Some((Action::Cue, Target::Deck(0))));
+        assert_eq!(on(&[0x9e, 25, 127]), Some((Action::PlayPause, Target::Deck(0))));
+        assert_eq!(on(&[0x9e, 26, 127]), Some((Action::Cue, Target::Deck(1))));
+        assert_eq!(on(&[0x9e, 27, 127]), Some((Action::PlayPause, Target::Deck(1))));
         // Top-left encoder one click clockwise (two's complement 1): jog.
-        assert_eq!(hit(&m, &[0xbe, 0, 1]).map(|h| h.action), Some(Action::JogForward));
-        assert!(matches!(m.decode(&[0xbe, 16, 0]), Some(Event::Fader { kind: FaderKind::Tempo, .. })));
-        // No control is mapped twice.
+        assert_eq!(on(&[0xbe, 0, 1]), Some((Action::JogForward, Target::Deck(0))));
+        assert!(matches!(
+            m.decode(&[0xbe, 16, 0]),
+            Some(Event::Fader { kind: FaderKind::Tempo, target: Target::Deck(0), .. })
+        ));
+        assert!(matches!(
+            m.decode(&[0xbe, 18, 0]),
+            Some(Event::Fader { kind: FaderKind::Tempo, target: Target::Deck(1), .. })
+        ));
+        // Every control is on channel 15, a deck's, and mapped once.
         let mut seen = std::collections::HashSet::new();
         for b in &cfg.map {
-            assert!(seen.insert((b.channel, b.note, b.cc)), "mapped twice: {b:?}");
+            assert!(b.channel == Some(15) && b.deck.is_some(), "not on a deck's side: {b:?}");
+            assert!(seen.insert((b.note, b.cc)), "mapped twice: {b:?}");
         }
+        // The sides match: deck B's columns are deck A's plus 2, except the
+        // bottom row, where each side has its encoder and button.
+        let side = |deck| cfg.map.iter().filter(move |b| b.deck == Some(deck));
+        let bottom = |b: &&Binding| b.note.is_some_and(|n| n < 16) || b.cc.is_some_and(|c| c >= 20);
+        let a: Vec<_> = side(0).filter(|b| !bottom(b)).collect();
+        let b: Vec<_> = side(1).filter(|b| !bottom(b)).collect();
+        assert_eq!(a.len(), b.len());
+        for (a, b) in a.into_iter().zip(b) {
+            let shifted = Binding { note: a.note.map(|n| n + 2), cc: a.cc.map(|c| c + 2), deck: Some(1), ..a.clone() };
+            assert_eq!(*b, shifted);
+        }
+        let actions = |deck| side(deck).filter(bottom).map(|b| (b.action, b.up, b.down)).collect::<Vec<_>>();
+        assert_eq!(actions(0), actions(1));
     }
 
     #[test]

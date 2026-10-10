@@ -286,8 +286,18 @@ impl App {
             Action::BrowsePageDown => b.move_by(browser::ROWS.cast_signed()),
             Action::BrowseLoad => self.open_selected(Some(target)),
             Action::BrowseEnter => self.open_selected(None),
-            Action::BrowseBack if b.pop() => {
-                self.nav.pop();
+            // One button browses: opens the browser, backs out a level, and
+            // at the top closes it (a controller side has no room for two).
+            Action::BrowseBack if !b.open => {
+                b.open = true;
+                self.rescan_if_sources_changed();
+            }
+            Action::BrowseBack => {
+                if b.pop() {
+                    self.nav.pop();
+                } else {
+                    b.open = false;
+                }
             }
             _ => {}
         }
