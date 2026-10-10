@@ -576,7 +576,7 @@ fn run() -> Result<()> {
         net_shown: (u64::MAX, args.deck.unwrap_or(0)),
     };
     app.set_focus(0);
-    let mut midi = start_midi(&args, midi_inputs, &app.shared_focus, app.net.clone())?;
+    let mut midi = start_midi(&args, midi_inputs, &app.shared_focus, app.net.clone(), &mut app.settings)?;
     let debug = std::env::var_os("KDJ_DEBUG_INPUT").is_some();
     let mut input = Input { keymap, held: HashMap::new(), touch: touch::Touch::default(), finger: None, debug };
     let mut frames = Frames { started: Instant::now(), loaded: false, snaps: Vec::with_capacity(app.slots.len()) };
@@ -620,18 +620,21 @@ fn run() -> Result<()> {
     }
 }
 
-/// Start the controller thread if there's a mapping file.
+/// Start the controller thread if there's a mapping file, and give the
+/// settings screen its drawing.
 fn start_midi(
     args: &Args,
     inputs: Vec<InputSender>,
     focus: &Arc<AtomicUsize>,
     net: Option<Arc<net::Net>>,
+    settings: &mut Settings,
 ) -> Result<Option<midi::Midi>> {
     let Some(path) = &args.midi else { return Ok(None) };
     let (map, mut cfg) = MidiMap::from_toml(&std::fs::read_to_string(path)?)?;
     if args.midi_port.is_some() {
         cfg.port.clone_from(&args.midi_port);
     }
+    settings.set_mapping(&kdj_engine::device::Diagram::new(&cfg));
     Ok(Some(midi::start(&cfg, map, inputs, Arc::clone(focus), net)))
 }
 

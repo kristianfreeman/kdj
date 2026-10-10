@@ -143,6 +143,97 @@ impl Action {
         )
     }
 
+    /// A short uppercase name that fits a button on a controller drawing.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::PlayPause => "PLAY",
+            Self::Cue => "CUE",
+            Self::TempoUp => "TEMPO +",
+            Self::TempoDown => "TEMPO −",
+            Self::TempoUpCoarse => "TEMPO ++",
+            Self::TempoDownCoarse => "TEMPO −−",
+            Self::TempoReset => "TEMPO 0",
+            Self::TempoRange => "RANGE",
+            Self::KeyLock => "KEY",
+            Self::NudgeForward => "NUDGE →",
+            Self::NudgeBack => "← NUDGE",
+            Self::JogForward => "JOG →",
+            Self::JogBack => "← JOG",
+            Self::PhaseForward => "PHASE +",
+            Self::PhaseBack => "PHASE −",
+            Self::Quantize => "QUANTIZE",
+            Self::LoopToggle => "LOOP",
+            Self::LoopHalve => "LOOP ÷2",
+            Self::LoopDouble => "LOOP ×2",
+            Self::BeatLoop1 => "LOOP 1",
+            Self::BeatLoop2 => "LOOP 2",
+            Self::BeatLoop4 => "LOOP 4",
+            Self::BeatLoop8 => "LOOP 8",
+            Self::BeatLoop16 => "LOOP 16",
+            Self::BeatLoop32 => "LOOP 32",
+            Self::HotCue1 => "HOT A",
+            Self::HotCue2 => "HOT B",
+            Self::HotCue3 => "HOT C",
+            Self::HotCue4 => "HOT D",
+            Self::HotCue5 => "HOT E",
+            Self::HotCue6 => "HOT F",
+            Self::HotCue7 => "HOT G",
+            Self::HotCue8 => "HOT H",
+            Self::Sync => "SYNC",
+            Self::Master => "MASTER",
+            Self::BeatJumpForward => "JUMP →",
+            Self::BeatJumpBack => "← JUMP",
+            Self::GridAnchorHere => "GRID 1",
+            Self::GridNudgeEarlier => "← GRID",
+            Self::GridNudgeLater => "GRID →",
+            Self::BpmUp => "BPM +",
+            Self::BpmDown => "BPM −",
+            Self::BpmHalve => "BPM ÷2",
+            Self::BpmDouble => "BPM ×2",
+            Self::ZoomIn => "ZOOM +",
+            Self::ZoomOut => "ZOOM −",
+            Self::ToggleHud => "HUD",
+            Self::SwitchDeck => "DECK",
+            Self::Settings => "SETTINGS",
+            Self::Browse => "BROWSE",
+            Self::BrowseUp => "BROWSE ↑",
+            Self::BrowseDown => "BROWSE ↓",
+            Self::BrowsePageUp => "PAGE ↑",
+            Self::BrowsePageDown => "PAGE ↓",
+            Self::BrowseLoad => "LOAD",
+            Self::BrowseEnter => "OPEN",
+            // Opens the browser, backs out a level, and at the top closes it.
+            Self::BrowseBack => "BROWSE/BACK",
+        }
+    }
+
+    /// The name for an endless encoder turning `up` one way and `down` the
+    /// other: one word for a known pair (JOG, TEMPO), else both labels.
+    #[must_use]
+    pub fn pair_label(up: Self, down: Self) -> String {
+        let pairs = [
+            (Self::JogForward, Self::JogBack, "JOG"),
+            (Self::TempoUp, Self::TempoDown, "TEMPO"),
+            (Self::TempoUpCoarse, Self::TempoDownCoarse, "TEMPO ±"),
+            (Self::NudgeForward, Self::NudgeBack, "NUDGE"),
+            (Self::PhaseForward, Self::PhaseBack, "PHASE"),
+            (Self::LoopDouble, Self::LoopHalve, "LOOP ×2/÷2"),
+            (Self::BeatJumpForward, Self::BeatJumpBack, "JUMP"),
+            (Self::GridNudgeLater, Self::GridNudgeEarlier, "GRID"),
+            (Self::BpmUp, Self::BpmDown, "BPM"),
+            (Self::BpmDouble, Self::BpmHalve, "BPM ×2/÷2"),
+            (Self::ZoomIn, Self::ZoomOut, "ZOOM"),
+            (Self::BrowseDown, Self::BrowseUp, "BROWSE"),
+            (Self::BrowsePageDown, Self::BrowsePageUp, "PAGE"),
+        ];
+        // Either way round: which way is "up" is the mapping's business.
+        pairs
+            .iter()
+            .find(|&&(a, b, _)| (a, b) == (up, down) || (b, a) == (up, down))
+            .map_or_else(|| format!("{} / {}", up.label(), down.label()), |&(_, _, name)| name.to_owned())
+    }
+
     /// Slot (0–7) for the `HotCueN` actions.
     #[must_use]
     pub fn hot_cue_index(self) -> Option<usize> {

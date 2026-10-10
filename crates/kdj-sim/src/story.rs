@@ -12,6 +12,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use kdj_engine::analysis::{self, synth::SynthSpec};
+use kdj_engine::device::Diagram;
+use kdj_engine::midimap::{MidiConfig, MidiMap};
 use kdj_engine::session::{LocalSession, Session};
 use kdj_engine::{Action, Edge, Snapshot, Track};
 use kdj_library::library;
@@ -58,6 +60,7 @@ pub fn run(opts: &Opts) -> Result<bool> {
     deck_stories(&mut book)?;
     browser_stories(&mut book)?;
     settings_stories(&mut book)?;
+    mapping_stories(&mut book)?;
     std::fs::write(out.join("index.html"), html(&book.stories))?;
     println!(
         "wrote {} stories to {} in {:.1} s",
@@ -263,7 +266,7 @@ fn settings_stories(book: &mut Book) -> Result<()> {
     for (page, name, note) in [
         (1, "Audio", "Buffer sizes with their latency at the output's rate."),
         (2, "Sync", "Ableton Link and how SYNC lines up."),
-        (3, "Controller", "LED colour for the K3, and MIDI learn."),
+        (3, "Controller", "LED colour for the K3, the mapping drawn, and MIDI learn."),
         (4, "Display", "Zoom, phase meter, perf overlay."),
         (5, "System", "Version and library rescan."),
     ] {
@@ -271,6 +274,45 @@ fn settings_stories(book: &mut Book) -> Result<()> {
         s.move_by(page);
         s.sideways(1);
         let file = book.add("Settings", name, note);
+        book.screen.save_settings_png(&file, &mut s, "")?;
+    }
+    Ok(())
+}
+
+/// Settings › Controller › Mapping for the bundled mappings.
+fn mapping_stories(book: &mut Book) -> Result<()> {
+    let root = workspace_root()?;
+    let read = |file: &str| -> Result<MidiConfig> {
+        Ok(MidiMap::from_toml(&std::fs::read_to_string(root.join("config").join(file))?)?.1)
+    };
+    let k3 = read("xone-k3.toml")?;
+    let example = read("midi-example.toml")?;
+    let unknown = MidiConfig { port: Some("nanoKONTROL2".into()), ..example.clone() };
+    let stories: [(&str, &str, Option<&MidiConfig>); 4] = [
+        (
+            "Xone:K3",
+            "config/xone-k3.toml: deck A's columns filled, deck B's outlined; unused pots and faders faint.",
+            Some(&k3),
+        ),
+        (
+            "Focused deck",
+            "config/midi-example.toml on the K3: no deck given, so they follow the focused deck (dark fill).",
+            Some(&example),
+        ),
+        ("Unknown controller", "No drawing for its port: the bindings as a table.", Some(&unknown)),
+        ("No mapping", "Started without --midi.", None),
+    ];
+    for (name, note, cfg) in stories {
+        let mut s = Settings::new(settings::pages(&Prefs::default(), &SystemInfo::default()));
+        if let Some(cfg) = cfg {
+            s.set_mapping(&Diagram::new(cfg));
+        }
+        // Controller › Mapping › Show.
+        s.move_by(3);
+        s.sideways(1);
+        s.move_by(2);
+        s.enter();
+        let file = book.add("Mapping", name, note);
         book.screen.save_settings_png(&file, &mut s, "")?;
     }
     Ok(())

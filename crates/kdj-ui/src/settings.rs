@@ -5,9 +5,15 @@
 //!
 //! Data-driven: the app builds the pages from its preferences and what it
 //! knows about the system, and reads back what changed by `Key`.
+//!
+//! Controller › Mapping opens a drawing of the controller saying what each
+//! control does, over the pages until it's closed.
 
 use std::fmt::Write;
 
+use kdj_engine::device::{Diagram, Shape};
+
+use crate::diagram;
 use crate::draw::{Frame, Rgba, count_f32, grey};
 use crate::scene::{HEIGHT, WIDTH};
 use crate::text::{Align, Atlas, Style};
@@ -52,6 +58,7 @@ pub enum Key {
     Decks,
     Controller,
     LedColour,
+    Mapping,
     Learn,
     Zoom,
     PhaseMeter,
@@ -104,16 +111,47 @@ pub struct Settings {
     row: usize,
     column: Column,
     text: String,
+    mapping: Mapping,
+}
+
+/// The controller drawing.
+#[derive(Debug, Default)]
+struct Mapping {
+    open: bool,
+    /// Laid out once, when the mapping is loaded; empty without one.
+    shapes: Vec<Shape>,
 }
 
 impl Settings {
     #[must_use]
     pub fn new(pages: Vec<Page>) -> Self {
-        Self { open: false, pages, page: 0, row: 0, column: Column::Pages, text: String::with_capacity(64) }
+        Self {
+            open: false,
+            pages,
+            page: 0,
+            row: 0,
+            column: Column::Pages,
+            text: String::with_capacity(64),
+            mapping: Mapping::default(),
+        }
+    }
+
+    /// The controller mapping that Controller › Mapping draws.
+    pub fn set_mapping(&mut self, diagram: &Diagram) {
+        self.mapping.shapes = diagram.shapes();
+    }
+
+    /// Whether the controller drawing is showing.
+    #[must_use]
+    pub const fn mapping_open(&self) -> bool {
+        self.mapping.open
     }
 
     /// Up / down in the current column.
     pub fn move_by(&mut self, d: isize) {
+        if self.mapping.open {
+            return;
+        }
         match self.column {
             Column::Pages => {
                 self.page = clamp_step(self.page, d, self.pages.len());
@@ -123,8 +161,13 @@ impl Settings {
         }
     }
 
-    /// Right: into the rows, then change the value; left: the other way.
+    /// Right: into the rows, then change the value; left: the other way
+    /// (and out of the controller drawing).
     pub fn sideways(&mut self, d: isize) {
+        if self.mapping.open {
+            self.mapping.open = d >= 0;
+            return;
+        }
         match (self.column, d.signum()) {
             (Column::Pages, 1) => self.column = Column::Rows,
             (Column::Rows, -1) if !matches!(self.current().map(|r| &r.value), Some(Value::Choice { .. })) => {
@@ -135,8 +178,12 @@ impl Settings {
         }
     }
 
-    /// Back out to the page list; false if already there.
+    /// Close the controller drawing, or back out to the page list; false if
+    /// already there.
     pub fn back(&mut self) -> bool {
+        if std::mem::take(&mut self.mapping.open) {
+            return true;
+        }
         std::mem::replace(&mut self.column, Column::Pages) == Column::Rows
     }
 
@@ -160,19 +207,33 @@ impl Settings {
     }
 
     /// Return: run the highlighted row's action (its key), or step into the
-    /// rows / to the next option.
+    /// rows / to the next option. Settings opens the controller drawing
+    /// itself.
     pub fn enter(&mut self) -> Option<Key> {
-        if let Some(Row { key, value: Value::Action(_), .. }) = self.current() {
-            return Some(*key);
+        if self.mapping.open {
+            return None;
+        }
+        if let Some(&Row { key, value: Value::Action(_), .. }) = self.current() {
+            return self.run(key);
         }
         self.sideways(1);
         None
     }
 
-    /// A tap on row `row`'s action button: its key.
+    /// A tap on row `row`'s action button: its key, for the app to run (None
+    /// for the controller drawing, which settings opens itself).
     pub fn press(&mut self, row: usize) -> Option<Key> {
         let key = self.rows().get(row)?.key;
         (self.row, self.column) = (row, Column::Rows);
+        self.run(key)
+    }
+
+    /// An action row's key for the app to run, unless it's one of ours.
+    const fn run(&mut self, key: Key) -> Option<Key> {
+        if matches!(key, Key::Mapping) {
+            self.mapping.open = true;
+            return None;
+        }
         Some(key)
     }
 
@@ -227,12 +288,30 @@ impl Settings {
 
     pub fn draw(&mut self, f: &mut Frame, atlas: &Atlas, status: &str) {
         f.rect(0.0, 0.0, WIDTH, HEIGHT, BG);
+        if self.mapping.open {
+            self.draw_mapping(f, atlas);
+            return;
+        }
         atlas.draw(f, Style::Body, 16.0, 30.0, Align::Left, "Settings", FG);
         atlas.draw(f, Style::Label, WIDTH - 16.0, 30.0, Align::Right, concat!("kdj ", env!("CARGO_PKG_VERSION")), DIM);
         f.rect(16.0, 46.0, WIDTH - 32.0, 1.0, FAINT);
         self.page_list(f, atlas);
         self.rows_panel(f, atlas);
         self.footer(f, atlas, status);
+    }
+
+    /// The controller drawing, full screen; back (esc, ←, or a tap top
+    /// right) returns to the Controller page.
+    fn draw_mapping(&self, f: &mut Frame, atlas: &Atlas) {
+        if self.mapping.shapes.is_empty() {
+            atlas.draw(f, Style::Body, 16.0, 30.0, Align::Left, "Controller mapping", FG);
+            f.rect(16.0, 46.0, WIDTH - 32.0, 1.0, FAINT);
+            atlas.draw(f, Style::Body, 16.0, 90.0, Align::Left, "No mapping: start kdj with --midi FILE", DIM);
+        } else {
+            diagram::draw(f, atlas, &self.mapping.shapes);
+        }
+        atlas.draw(f, Style::Label, WIDTH - 16.0, 30.0, Align::Right, "esc back ×", DIM);
+        f.touch.add([WIDTH - 150.0, 0.0, 150.0, 46.0], Target::Action(kdj_engine::Action::Browse));
     }
 
     fn page_list(&self, f: &mut Frame, atlas: &Atlas) {
@@ -522,9 +601,10 @@ fn controller(p: &Prefs, info: &SystemInfo) -> Vec<Row> {
             "Xone:K2/K3 button colour. Lit or not is what matters.",
             choice(&["Red", "Amber", "Green"], p.led_colour),
         ),
+        row(Key::Mapping, "Mapping", "What each control does, drawn on the controller.", Value::Action("Show".into())),
         row(
             Key::Learn,
-            "Mapping",
+            "MIDI learn",
             "Map a controller by touching each control when asked.",
             Value::Action("Learn".into()),
         ),
@@ -606,5 +686,26 @@ mod tests {
         assert_eq!(f.touch.iter().filter(|t| matches!(t, Target::Page(_))).count(), 6);
         assert_eq!(s.choose(2, 0), Some(Key::Quantize));
         assert_eq!(s.choice(Key::Quantize), Some(0));
+    }
+
+    #[test]
+    fn the_mapping_opens_from_the_controller_page_and_backs_out() {
+        let mut s = Settings::new(pages(&Prefs::default(), &SystemInfo::default()));
+        s.move_by(3); // Controller
+        s.sideways(1);
+        s.move_by(2);
+        assert_eq!(s.current().map(|r| r.key), Some(Key::Mapping));
+        assert_eq!(s.enter(), None, "settings opens it itself");
+        assert!(s.mapping_open());
+        s.move_by(1);
+        let mut f = Frame::default();
+        s.draw(&mut f, &Atlas::new(1.0), "");
+        assert_eq!(f.touch.iter().collect::<Vec<_>>(), [Target::Action(kdj_engine::Action::Browse)], "only back");
+        assert!(s.back() && !s.mapping_open());
+        assert_eq!(s.current().map(|r| r.key), Some(Key::Mapping), "where it was");
+        assert_eq!(s.press(3), Some(Key::Learn));
+        assert_eq!(s.press(2), None);
+        s.sideways(-1);
+        assert!(!s.mapping_open(), "← closes it too");
     }
 }

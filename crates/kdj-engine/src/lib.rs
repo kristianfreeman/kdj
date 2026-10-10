@@ -3,6 +3,7 @@
 
 pub mod action;
 pub mod analysis;
+pub mod device;
 pub mod engine;
 pub mod feedback;
 pub mod grid;

@@ -1,0 +1,122 @@
+# Allen & Heath Xone:K3, as it sits in front of you (portrait), with its
+# factory MIDI map (latching layers off, channel 15). For the controller
+# drawing on the settings screen and in docs/; the mapping itself lives in
+# config/xone-k3.toml.
+#
+# Positions are in units: a column is 1 wide, y counts down from the top.
+# Heights needn't be to scale, only enough for a label: the unused pots get
+# thin rows so the buttons get room.
+
+[device]
+name = "Xone:K3"
+maker = "Allen & Heath"
+# Matched against the mapping's `port`.
+ports = ["XONE:K3"]
+channel = 15
+size = [4, 14.8]
+
+# A [[row]] is one control per column, x = 0, 1, 2… (or `x = [...]`), with
+# its notes or CCs in the same order.
+
+# Endless encoders, push to click.
+[[row]]
+kind = "encoder"
+y = 0
+h = 1.7
+cc = [0, 1, 2, 3]
+push = [52, 53, 54, 55]
+
+# Three rows of pots.
+[[row]]
+kind = "pot"
+y = 1.7
+h = 0.6
+cc = [4, 5, 6, 7]
+
+[[row]]
+kind = "pot"
+y = 2.3
+h = 0.6
+cc = [8, 9, 10, 11]
+
+[[row]]
+kind = "pot"
+y = 2.9
+h = 0.6
+cc = [12, 13, 14, 15]
+
+# Three rows of buttons under the pots.
+[[row]]
+kind = "button"
+y = 3.6
+note = [48, 49, 50, 51]
+
+[[row]]
+kind = "button"
+y = 4.6
+note = [44, 45, 46, 47]
+
+[[row]]
+kind = "button"
+y = 5.6
+note = [40, 41, 42, 43]
+
+[[row]]
+kind = "fader"
+y = 6.7
+h = 2.2
+cc = [16, 17, 18, 19]
+
+# The 4×4 grid.
+[[row]]
+kind = "button"
+y = 9.0
+note = [36, 37, 38, 39]
+
+[[row]]
+kind = "button"
+y = 10.0
+note = [32, 33, 34, 35]
+
+[[row]]
+kind = "button"
+y = 11.0
+note = [28, 29, 30, 31]
+
+[[row]]
+kind = "button"
+y = 12.0
+note = [24, 25, 26, 27]
+
+# Bottom row, left to right: encoder, LAYER, SHIFT, encoder.
+[[control]]
+kind = "encoder"
+x = 0
+y = 13.1
+h = 1.7
+cc = 20
+push = 13
+
+[[control]]
+kind = "button"
+name = "LAYER"
+x = 1
+y = 13.1
+h = 1.7
+note = 12
+
+[[control]]
+kind = "button"
+name = "SHIFT"
+x = 2
+y = 13.1
+h = 1.7
+note = 15
+
+[[control]]
+kind = "encoder"
+x = 3
+y = 13.1
+h = 1.7
+cc = 21
+push = 14

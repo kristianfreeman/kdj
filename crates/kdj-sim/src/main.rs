@@ -8,6 +8,7 @@
 //!   kdj-sim rekordbox list|bench [--count N]   (local Rekordbox collection)
 //!   kdj-sim browser OUT.png [--open A/B] [--cursor N]   (browser: your library + a fake USB)
 //!   kdj-sim story [DIR]   (every screen state, as an HTML page; default target/storybook)
+//!   kdj-sim device MAPPING.toml [--device NAME|FILE|none]   (the mapping drawn on its controller, SVG to stdout)
 //!   kdj-sim ab TRACK [--tempo PCT] [--at SECS] [--secs N] [--out DIR]   (key lock listening test)
 
 mod ab;
@@ -58,6 +59,7 @@ fn run() -> Result<bool> {
         "browser" => browser_frame(&opts),
         "ab" => ab::run(&opts),
         "story" => story::run(&opts),
+        "device" => device_svg(&opts),
         "rekordbox" => match opts.positional.first().map(String::as_str) {
             Some("list") => rekordbox::list(SAMPLE_RATE),
             Some("probe") => rekordbox::probe(SAMPLE_RATE),
@@ -198,6 +200,24 @@ fn synth(opts: &Opts) -> Result<bool> {
     }
     perf::write_recording(Path::new(out), &analysis::synth::render(&spec), spec.sample_rate)?;
     println!("wrote {out}: {} bpm, first kick (bar 1) at {:.4} s", spec.bpm, spec.first_kick());
+    Ok(true)
+}
+
+/// A mapping drawn on its controller (found by the mapping's port, or named
+/// with `--device`: a built-in's name, a description file, or "none" for a
+/// table), as SVG on stdout.
+fn device_svg(opts: &Opts) -> Result<bool> {
+    use kdj_engine::device::{Device, Diagram};
+    let usage = "usage: kdj-sim device MAPPING.toml [--device NAME|FILE|none] > OUT.svg";
+    let path = opts.positional.first().ok_or_else(|| anyhow!(usage))?;
+    let (_, cfg) = kdj_engine::midimap::MidiMap::from_toml(&std::fs::read_to_string(path)?)?;
+    let device = match opts.flag("device") {
+        None => Device::for_mapping(&cfg),
+        Some("none") => None,
+        Some(d) if Path::new(d).is_file() => Some(Device::from_toml(&std::fs::read_to_string(d)?)?),
+        Some(d) => Some(Device::named(d).ok_or_else(|| anyhow!("no built-in device {d:?}"))?),
+    };
+    print!("{}", Diagram::on(device, &cfg).svg());
     Ok(true)
 }
 

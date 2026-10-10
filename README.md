@@ -123,6 +123,13 @@ it reaches the deck's tempo, so after SYNC or a tempo button nothing
 jumps; until then the screen shows where it is as a hollow marker beside
 the tempo. SYNC owns the tempo while it's on.
 
+Settings › Controller › Mapping draws the controller with what each
+control does: deck A's controls filled, deck B's outlined, the focused
+deck's dark, unmapped ones faint. Controller layouts are data in
+`config/devices/` (the Xone:K3 so far), found by the mapping's `port`; a
+mapping for anything else shows as a table. The same drawing as SVG, for
+docs: [`docs/xone-k3.svg`](docs/xone-k3.svg), from `kdj-sim device`.
+
 ### One controller, two Pis
 
 Each Pi is one deck, with its own output into its own mixer channel. They
@@ -159,6 +166,7 @@ cargo run --release -p kdj-sim -- frame out.png --link 135  # alone on Link: pha
 cargo run --release -p kdj-sim -- frame out.png --fader -5  # a tempo fader that hasn't caught up
 cargo run --release -p kdj-sim -- ab track.mp3 --tempo 6    # key lock listening test (target/ab)
 cargo run --release -p kdj-sim -- story                     # every screen state on one page (target/storybook)
+cargo run --release -p kdj-sim -- device config/xone-k3.toml > docs/xone-k3.svg   # a mapping drawn on its controller
 ```
 
 `ab` renders the same 30 s of a track as it is, sped up without key lock,

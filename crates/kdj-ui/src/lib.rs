@@ -2,6 +2,7 @@
 //! context and it draws; the app (SDL2) and the simulator (offscreen) share it.
 
 pub mod browser;
+pub mod diagram;
 pub mod draw;
 pub mod gpu;
 pub mod scene;
