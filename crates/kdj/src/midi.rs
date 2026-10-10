@@ -126,15 +126,14 @@ pub fn start(cfg: &MidiConfig, map: MidiMap, decks: Vec<InputSender>, focus: Arc
     Midi { ui: ui_rx, leds: crate::leds::Leds::new(cfg) }
 }
 
-/// A port as last seen: its full name (on ALSA ending in "client:port"),
-/// midir's id for it, and how many ports there were. If any of these change
-/// the connection may be dead (unplugged and replugged between two looks), so
-/// it's made again.
+/// A port as last seen: its full name (on ALSA ending in "client:port") and
+/// midir's id for it. A controller unplugged and replugged between two looks
+/// comes back with a new id, so the connection is made again. (Not the port
+/// count: our own LED output adds a port, which isn't the controller changing.)
 #[derive(Clone, PartialEq, Eq)]
 struct Seen {
     name: String,
     id: String,
-    ports: usize,
 }
 
 struct Found {
@@ -219,7 +218,7 @@ fn find_port(wanted: Option<&str>) -> Result<Option<Found>, String> {
         ok.then(|| (p.clone(), name))
     });
     Ok(hit.map(|(port, name)| {
-        let seen = Seen { name, id: port.id(), ports: ports.len() };
+        let seen = Seen { name, id: port.id() };
         Found { input, port, seen }
     }))
 }
@@ -298,10 +297,16 @@ pub fn learn(out: &Path, wanted: Option<&str>) -> Result<()> {
         }
     });
     println!("Learning from {name}. Touch each control when asked; press Enter to skip one.\n");
-    let mut map = Vec::new();
+    let mut map: Vec<Binding> = Vec::new();
     for ask in LEARN {
-        if let Some(b) = learn_one(ask, &rx) {
+        // A control already given to something else is refused: ask again.
+        while let Some(b) = learn_one(ask, &rx) {
+            if let Some(taken) = map.iter().find(|m| same_control(m, &b)) {
+                println!("    that's already {}: use another (Enter skips)", what_it_does(taken));
+                continue;
+            }
             map.push(b);
+            break;
         }
     }
     // Without the client:port numbers, which change between boots.
@@ -387,6 +392,21 @@ fn learn_fader(kind: FaderKind, rx: &mpsc::Receiver<Heard>) -> Option<Binding> {
     Some(b)
 }
 
+/// Whether two bindings are the same physical control.
+fn same_control(a: &Binding, b: &Binding) -> bool {
+    a.channel == b.channel && ((a.note.is_some() && a.note == b.note) || (a.cc.is_some() && a.cc == b.cc))
+}
+
+/// What a learned binding does, for messages.
+fn what_it_does(b: &Binding) -> String {
+    match (b.action, b.up, b.fader) {
+        (Some(a), ..) => format!("{a:?}"),
+        (None, Some(up), _) => format!("the {up:?} encoder"),
+        (None, None, Some(f)) => format!("the {f:?} fader"),
+        _ => "taken".into(),
+    }
+}
+
 /// The next note-on or CC, then a short pause to let the same control's
 /// release and repeats go by. None if Enter was pressed (skip).
 fn next_control(rx: &mpsc::Receiver<Heard>) -> Option<Vec<u8>> {
@@ -439,6 +459,16 @@ mod tests {
         assert_eq!(base_name("XONE:K3"), "XONE:K3");
         assert_eq!(base_name("XONE:K3 MIDI 1"), "XONE:K3 MIDI 1");
         assert_eq!(base_name("Deck 1:a"), "Deck 1:a");
+    }
+
+    #[test]
+    fn a_control_can_only_be_learned_once() {
+        let play = Binding { channel: Some(15), note: Some(12), action: Some(Action::PlayPause), ..Binding::default() };
+        let cue = Binding { channel: Some(15), note: Some(12), action: Some(Action::Cue), ..Binding::default() };
+        let other = Binding { channel: Some(15), note: Some(13), action: Some(Action::Cue), ..Binding::default() };
+        let cc = Binding { channel: Some(15), cc: Some(12), up: Some(Action::JogForward), ..Binding::default() };
+        assert!(same_control(&play, &cue) && !same_control(&play, &other) && !same_control(&play, &cc));
+        assert_eq!(what_it_does(&play), "PlayPause");
     }
 
     #[test]

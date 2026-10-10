@@ -57,6 +57,8 @@ for g in audio video render input plugdev; do
     if getent group "$g" >/dev/null; then usermod -aG "$g" kdj; fi
 done
 [ -f /etc/kdj/kdj.env ] || install -m 644 "$here/kdj.env" /etc/kdj/kdj.env
+# The Xone:K3 map is ours, so it's updated; the example is only a starting point.
+install -m 644 "$repo/config/xone-k3.toml" /etc/kdj/xone-k3.toml
 if [ -f "$repo/config/midi-example.toml" ] && [ ! -f /etc/kdj/midi-example.toml ]; then
     install -m 644 "$repo/config/midi-example.toml" /etc/kdj/midi-example.toml
 fi
@@ -80,7 +82,11 @@ if [ "$live" -eq 1 ]; then
 fi
 
 # The deck owns tty1: no login prompt there, at boot or on a VT switch.
+# Masked, not just disabled: Raspberry Pi OS's user scripts (cancel-rename,
+# rename-user) enable getty@tty1 again, and then it, not the deck, may win
+# the screen at boot.
 systemctl disable getty@tty1.service >/dev/null 2>&1 || true
+systemctl mask getty@tty1.service >/dev/null
 systemctl mask autovt@tty1.service >/dev/null
 systemctl enable kdj.service kdj-name.service
 

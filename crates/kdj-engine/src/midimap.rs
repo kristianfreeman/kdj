@@ -361,6 +361,24 @@ mod tests {
     }
 
     #[test]
+    fn the_xone_k3_mapping_matches_the_factory_map() {
+        let (m, cfg) = MidiMap::from_toml(include_str!("../../../config/xone-k3.toml")).expect("valid");
+        assert_eq!(cfg.port.as_deref(), Some("XONE:K3"));
+        // Channel 15 is status nibble 14. Grid bottom row: CUE, PLAY.
+        assert_eq!(hit(&m, &[0x9e, 24, 127]).map(|h| h.action), Some(Action::Cue));
+        assert_eq!(hit(&m, &[0x9e, 25, 127]).map(|h| h.action), Some(Action::PlayPause));
+        assert_eq!(hit(&m, &[0x9e, 36, 127]).map(|h| h.action), Some(Action::HotCue1));
+        // Top-left encoder one click clockwise (two's complement 1): jog.
+        assert_eq!(hit(&m, &[0xbe, 0, 1]).map(|h| h.action), Some(Action::JogForward));
+        assert!(matches!(m.decode(&[0xbe, 16, 0]), Some(Event::Fader { kind: FaderKind::Tempo, .. })));
+        // No control is mapped twice.
+        let mut seen = std::collections::HashSet::new();
+        for b in &cfg.map {
+            assert!(seen.insert((b.channel, b.note, b.cc)), "mapped twice: {b:?}");
+        }
+    }
+
+    #[test]
     fn bad_bindings_are_rejected() {
         assert!(MidiMap::from_toml("[[midi.map]]\nnote = 1\nfader = \"Tempo\"").is_err(), "a fader is a cc");
         assert!(MidiMap::from_toml("[[midi.map]]\nnote = 1\ncc = 2\naction = \"Cue\"").is_err());

@@ -519,7 +519,8 @@ fn run() -> Result<()> {
     };
     app.set_focus(0);
     let mut midi = start_midi(&args, midi_inputs, &app.shared_focus)?;
-    let mut input = Input { keymap, held: HashMap::new(), touch: touch::Touch::default() };
+    let debug = std::env::var_os("KDJ_DEBUG_INPUT").is_some();
+    let mut input = Input { keymap, held: HashMap::new(), touch: touch::Touch::default(), finger: None, debug };
     let mut frames = Frames { started: Instant::now(), loaded: false, snaps: Vec::with_capacity(app.slots.len()) };
     let mut audio_watch = AudioWatch { errors: 0, lost: false, logged: Instant::now(), rt_logged: false };
     // Without vsync, pace the loop to about 60 fps instead of spinning a core.
@@ -763,24 +764,22 @@ struct Input {
     /// the same place even if the browser or focus changed in between.
     held: HashMap<String, (Action, usize)>,
     touch: touch::Touch,
+    /// The finger driving the touch controls (one at a time), by SDL's id.
+    finger: Option<i64>,
+    /// Log every pointer and touch event (`KDJ_DEBUG_INPUT=1`).
+    debug: bool,
 }
+
+/// SDL's mouse id for mouse events it makes from touches.
+const TOUCH_MOUSE_ID: u32 = u32::MAX;
 
 impl Input {
     /// Handle one window event; false when the window is closing.
     fn handle(&mut self, app: &mut App, window: &sdl2::video::Window, event: Event) -> bool {
-        let at = |x: i32, y: i32| logical(window, app.slots.len(), x, y);
+        if self.pointer(app, window, &event) {
+            return true;
+        }
         match event {
-            Event::MouseButtonDown { mouse_btn: MouseButton::Left, x, y, .. } => {
-                if let Some((slot, p)) = at(x, y) {
-                    self.touch.down(app, slot, p);
-                }
-            }
-            Event::MouseMotion { mousestate, x, y, .. } if mousestate.left() => {
-                if let Some((_, p)) = at(x, y) {
-                    self.touch.motion(app, p);
-                }
-            }
-            Event::MouseButtonUp { mouse_btn: MouseButton::Left, .. } => self.touch.up(app),
             Event::Quit { .. } => return false,
             Event::KeyDown { keycode: Some(k), keymod, repeat, .. } => self.key_down(app, k, keymod, repeat),
             Event::KeyUp { keycode: Some(k), .. } => {
@@ -792,6 +791,65 @@ impl Input {
             _ => {}
         }
         true
+    }
+
+    /// Mouse and touchscreen: the touch controls. A touchscreen arrives as
+    /// finger events (SDL's direct-to-display mode makes no mouse events
+    /// from them); where SDL does make mouse events from touches too, those
+    /// are skipped so nothing happens twice. True if `event` was one of these.
+    fn pointer(&mut self, app: &mut App, window: &sdl2::video::Window, event: &Event) -> bool {
+        let slots = app.slots.len();
+        let (w, h) = window.size();
+        let at = |x: f32, y: f32| logical(window, slots, x, y);
+        // Fingers come normalised to the window, 0 to 1.
+        let finger_at = |x: f32, y: f32| at(x * points(w), y * points(h));
+        let (handled, report) = match *event {
+            Event::MouseButtonDown { mouse_btn: MouseButton::Left, x, y, which, .. } if which != TOUCH_MOUSE_ID => {
+                if let Some((slot, p)) = at(coord(x), coord(y)) {
+                    self.touch.down(app, slot, p);
+                }
+                (true, true)
+            }
+            Event::MouseMotion { mousestate, x, y, which, .. } if mousestate.left() && which != TOUCH_MOUSE_ID => {
+                if let Some((_, p)) = at(coord(x), coord(y)) {
+                    self.touch.motion(app, p);
+                }
+                (true, false)
+            }
+            Event::MouseButtonUp { mouse_btn: MouseButton::Left, which, .. } if which != TOUCH_MOUSE_ID => {
+                self.touch.up(app);
+                (true, true)
+            }
+            Event::FingerDown { finger_id, x, y, .. } if self.finger.is_none() => {
+                self.finger = Some(finger_id);
+                if let Some((slot, p)) = finger_at(x, y) {
+                    self.touch.down(app, slot, p);
+                }
+                (true, true)
+            }
+            Event::FingerMotion { finger_id, x, y, .. } if self.finger == Some(finger_id) => {
+                if let Some((_, p)) = finger_at(x, y) {
+                    self.touch.motion(app, p);
+                }
+                (true, false)
+            }
+            Event::FingerUp { finger_id, .. } if self.finger == Some(finger_id) => {
+                self.finger = None;
+                self.touch.up(app);
+                (true, true)
+            }
+            Event::MouseButtonDown { .. }
+            | Event::MouseButtonUp { .. }
+            | Event::MouseMotion { .. }
+            | Event::FingerDown { .. }
+            | Event::FingerUp { .. }
+            | Event::FingerMotion { .. } => (true, false),
+            _ => (false, false),
+        };
+        if self.debug && handled && (report || !matches!(event, Event::MouseMotion { .. })) {
+            eprintln!("input: {event:?}");
+        }
+        handled
     }
 
     fn key_down(&mut self, app: &mut App, k: Keycode, keymod: Mod, repeat: bool) {
@@ -811,14 +869,22 @@ impl Input {
 
 /// A window point (as SDL reports mouse and touch positions) as a deck slot
 /// and a logical position on its screen.
-fn logical(window: &sdl2::video::Window, slots: usize, x: i32, y: i32) -> Option<(usize, [f32; 2])> {
+fn logical(window: &sdl2::video::Window, slots: usize, x: f32, y: f32) -> Option<(usize, [f32; 2])> {
     let (w, _) = window.size();
     let size = window.drawable_size();
-    // Pixels per point: 2 on a high-DPI screen. Window sizes fit in u16.
-    let px = |v: u32| f32::from(u16::try_from(v).unwrap_or(u16::MAX));
-    let pt = |v: i32| f32::from(i16::try_from(v).unwrap_or(i16::MAX));
-    let scale = px(size.0) / px(w.max(1));
-    kdj_ui::to_logical(size, slots, [pt(x) * scale, pt(y) * scale])
+    // Pixels per point: 2 on a high-DPI screen.
+    let scale = points(size.0) / points(w.max(1));
+    kdj_ui::to_logical(size, slots, [x * scale, y * scale])
+}
+
+/// A window dimension as a float (they fit in u16).
+fn points(v: u32) -> f32 {
+    f32::from(u16::try_from(v).unwrap_or(u16::MAX))
+}
+
+/// A mouse coordinate as a float (they fit in i16).
+fn coord(v: i32) -> f32 {
+    f32::from(i16::try_from(v).unwrap_or(i16::MAX))
 }
 
 /// What the render loop keeps from frame to frame.

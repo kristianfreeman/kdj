@@ -247,6 +247,7 @@ PROBE
         if grep -q "^probe: is-enabled $u\.[a-z]* enabled$" "$log"; then bad=1; echo "$u enabled after first boot" >&2; fi
     done
     grep -q '^probe: is-enabled autovt@tty1.service masked$' "$log" || bad=1
+    grep -q '^probe: is-enabled getty@tty1.service masked$' "$log" || { bad=1; echo "getty@tty1 not masked" >&2; }
     # Never a keyboard: no "create a user" dialog.
     grep -q '^probe: is-enabled userconfig.service masked$' "$log" || { bad=1; echo "userconfig not masked" >&2; }
     # Named itself, as a Pi nobody named does on first boot.
