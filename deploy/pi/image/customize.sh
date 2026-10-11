@@ -241,7 +241,7 @@ if [ -n "$dev" ]; then
     cat /tmp/probe-key.pub >>"/home/$dev/.ssh/authorized_keys"
     for i in $(seq 1 30); do systemctl is-active -q ssh.service && break; sleep 1; done
     echo "probe: ssh $(ssh -i /tmp/probe-key -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null "$dev@127.0.0.1" 'echo in as $(whoami); sudo -n true && echo with sudo' 2>&1 | tr '\n' ' ')"
+        -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$dev@127.0.0.1" 'echo in as $(whoami); sudo -n true && echo with sudo' 2>&1 | tr '\n' ' ')"
 fi
 echo "probe: done"
 systemctl poweroff
@@ -276,7 +276,8 @@ PROBE
     grep -q 'NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot' "$log" || bad=1
     # A dev image: logged in over SSH on first boot, with sudo.
     if [ -n "${KDJ_DEV_USER:-}" ]; then
-        grep -q "^probe: ssh in as $KDJ_DEV_USER with sudo" "$log" || { bad=1; echo "the dev login doesn't work over SSH" >&2; }
+        # (After Raspberry Pi's login banner, if it shows one.)
+        grep -q "^probe: ssh .*in as $KDJ_DEV_USER with sudo" "$log" || { bad=1; echo "the dev login doesn't work over SSH" >&2; }
     fi
     [ "$bad" -eq 0 ] || { echo "boot test failed" >&2; exit 1; }
     echo "boot test: ok" >&2
