@@ -23,6 +23,10 @@ out=$repo/target/image
 cache=$out/cache
 name=kdjos-rpi4-$(date +%Y-%m-%d)
 containers=(kdj-image-prepare kdj-image-binary kdj-image-build)
+# How hard to compress: 0 by default (6 s, ~740 MB; flashing is limited by
+# the card anyway), 6 for an image to hand out (`make release-image`: a
+# minute, ~600 MB).
+xz_level=${KDJ_XZ:-0}
 say() { printf '\n== %s\n' "$*"; }
 
 # One build at a time: builds share the containers' names and the work
@@ -49,6 +53,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
+# The containers' image for a Debian release: Debian with the tools
+# installed (tools.Dockerfile), built once and kept by Docker.
+tools_image() {
+    docker build -q --platform linux/arm64 --build-arg "CODENAME=$1" -t "kdj-image-tools:$1" \
+        - <"$here/tools.Dockerfile" >/dev/null
+    echo "kdj-image-tools:$1"
+}
+
 # docker run, removed afterwards (or on Ctrl-C).
 run() {
     local c=$1
@@ -68,22 +80,28 @@ https://downloads.raspberrypi.com/*.img.xz) ;;
 esac
 xz=$(basename "$url")
 echo "$url"
-# The checksum Raspberry Pi publishes next to the image, fetched every time.
+# The checksum Raspberry Pi publishes next to the image, fetched every time;
+# the download is checked against it once (.checked remembers which).
 curl -fsSL -o "$cache/$xz.sha256" "$url.sha256"
 if [ ! -f "$cache/$xz" ]; then
     curl -fL --progress-bar -o "$cache/$xz.part" "$url"
     mv "$cache/$xz.part" "$cache/$xz"
 fi
-(cd "$cache" && if command -v sha256sum >/dev/null; then sha256sum -c "$xz.sha256"; else shasum -a 256 -c "$xz.sha256"; fi) || {
-    echo "checksum mismatch: deleting $cache/$xz, run again" >&2
-    rm -f "$cache/$xz"
-    exit 1
-}
+if cmp -s "$cache/$xz.sha256" "$cache/$xz.checked" && [ ! "$cache/$xz" -nt "$cache/$xz.checked" ]; then
+    echo "$xz: checked before"
+else
+    (cd "$cache" && if command -v sha256sum >/dev/null; then sha256sum -c "$xz.sha256"; else shasum -a 256 -c "$xz.sha256"; fi) || {
+        echo "checksum mismatch: deleting $cache/$xz, run again" >&2
+        rm -f "$cache/$xz" "$cache/$xz.checked"
+        exit 1
+    }
+    cp "$cache/$xz.sha256" "$cache/$xz.checked"
+fi
 
 say "Which Debian release it is"
 codename=$(run kdj-image-prepare --privileged \
     -v "$repo:/src:ro" -v "$out:/out" -v "$cache:/cache:ro" \
-    debian:trixie /src/deploy/pi/image/customize.sh prepare "/cache/$xz" | tail -n1)
+    "$(tools_image trixie)" /src/deploy/pi/image/customize.sh prepare "/cache/$xz" | tail -n1)
 case $codename in
 '' | *[!a-z]*) echo "couldn't read the image's release ($codename)" >&2; exit 1 ;;
 esac
@@ -94,15 +112,15 @@ docker volume create kdj-image-cargo >/dev/null
 run kdj-image-binary \
     -v "$repo:/src:ro" -v kdj-image-cargo:/cache -v "$out/build:/out" \
     --tmpfs /work:exec,size=2g \
-    "debian:$codename" /src/deploy/pi/image/build-binary.sh
+    "$(tools_image "$codename")" /src/deploy/pi/image/build-binary.sh
 
 say "Installing into the image"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/crates/kdj/Cargo.toml" | head -n1)
 commit=$(git -C "$repo" describe --always --dirty 2>/dev/null || echo unknown)
 run kdj-image-build --privileged --cgroupns=host \
-    -e "KDJ_VERSION=$version" -e "KDJ_COMMIT=$commit" -e "KDJ_BASE=${xz%.img.xz}" \
+    -e "KDJ_VERSION=$version" -e "KDJ_COMMIT=$commit" -e "KDJ_BASE=${xz%.img.xz}" -e "KDJ_XZ=$xz_level" \
     -v "$repo:/src:ro" -v "$out:/out" \
-    "debian:$codename" /src/deploy/pi/image/customize.sh build "$name"
+    "$(tools_image "$codename")" /src/deploy/pi/image/customize.sh build "$name"
 
 rm -rf "$out/work"
 say "Done in $(( ($(date +%s) - start) / 60 )) min $(( ($(date +%s) - start) % 60 )) s"

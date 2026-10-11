@@ -18,6 +18,8 @@ say() { printf '\n== %s\n' "$*" >&2; }
 
 tools() {
     export DEBIAN_FRONTEND=noninteractive
+    # Already there in build.sh's tools image.
+    command -v zerofree >/dev/null && command -v systemd-nspawn >/dev/null && command -v xz >/dev/null && return
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends fdisk e2fsprogs zerofree xz-utils mount util-linux \
         systemd-container >/dev/null
@@ -180,7 +182,7 @@ build() {
     boot_test
 
     say "Compressing"
-    xz -T0 -6 -c "$img" >"/out/$name.img.xz.part"
+    xz -T0 "-${KDJ_XZ:-0}" -c "$img" >"/out/$name.img.xz.part"
     mv "/out/$name.img.xz.part" "/out/$name.img.xz"
     (cd /out && sha256sum "$name.img.xz" >"$name.img.xz.sha256" && cat "$name.img.xz.sha256")
     { info; echo "size=$(stat -c %s "$img")"; } >"/out/$name.img.xz.info"

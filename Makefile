@@ -1,5 +1,5 @@
 # One place for the checks. `make check` before pushing; `make full` rarely.
-.PHONY: check lint fmt test test-full perf scenarios full linux image card flash screens hooks deploy
+.PHONY: check lint fmt test test-full perf scenarios full linux image card flash screens hooks deploy release-image
 
 check: lint test scenarios
 
@@ -53,8 +53,13 @@ deploy:
 	tools/deploy.sh $(HOSTS)
 
 # Raspberry Pi 4 SD card image with the deck preinstalled, in Docker
-# (target/image/kdjos-rpi4-<date>.img.xz; see deploy/pi/README.md).
+# (target/image/kdjos-rpi4-<date>.img.xz; see deploy/pi/README.md). Lightly
+# compressed, for flashing here; release-image takes a minute more to make
+# it ~20% smaller, to hand out.
 image:
 	deploy/pi/image/build.sh
+
+release-image:
+	KDJ_XZ=6 deploy/pi/image/build.sh
 
 full: check test-full perf

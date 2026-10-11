@@ -93,6 +93,12 @@ to apply; `--user`, `--key`, `--hostname` change it, `--no-login` skips
 it, and `kdj-flash login` adds or replaces it on a card that's already
 flashed (applied at its next boot, booted before or not).
 
+`make image` takes under a minute: the build's containers come from a tools
+image Docker keeps (`image/tools.Dockerfile`), the Raspberry Pi OS download
+is checksummed once, and the image is lightly compressed (~740 MB; flashing
+is limited by the card). `make release-image` compresses it properly
+(~600 MB, a minute more) for handing out. Only one build runs at a time.
+
 `kdj-flash` says when the image here is older than the code (it reads the
 commit the image was built from) and offers to build a fresh one before
 flashing. For a Pi that's already running, `make deploy` is quicker: it

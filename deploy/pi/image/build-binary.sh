@@ -13,10 +13,13 @@ export RUSTUP_HOME=/cache/rustup CARGO_HOME=/cache/cargo
 codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
 export CARGO_TARGET_DIR=/cache/target-$codename
 
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends \
-    build-essential pkg-config git curl ca-certificates \
-    libsdl2-dev libasound2-dev cmake clang libclang-dev >/dev/null
+# Already there in build.sh's tools image.
+if ! { command -v clang && command -v cmake && pkg-config --exists sdl2 alsa; } >/dev/null 2>&1; then
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends \
+        build-essential pkg-config git curl ca-certificates \
+        libsdl2-dev libasound2-dev cmake clang libclang-dev >/dev/null
+fi
 if [ ! -x "$CARGO_HOME/bin/cargo" ]; then
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
         sh -s -- -y --no-modify-path --profile minimal --default-toolchain none >/dev/null

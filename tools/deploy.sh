@@ -30,9 +30,11 @@ echo "== Building the deck for the Pi (arm64)"
 out=$repo/target/deploy
 mkdir -p "$out"
 docker volume create kdj-image-cargo >/dev/null
+docker build -q --platform linux/arm64 --build-arg CODENAME=trixie -t kdj-image-tools:trixie \
+    - <"$repo/deploy/pi/image/tools.Dockerfile" >/dev/null
 docker run --rm --init --platform linux/arm64 \
     -v "$repo:/src:ro" -v kdj-image-cargo:/cache -v "$out:/out" --tmpfs /work:exec,size=2g \
-    debian:trixie /src/deploy/pi/image/build-binary.sh | tail -n 1
+    kdj-image-tools:trixie /src/deploy/pi/image/build-binary.sh | tail -n 1
 commit=$(git -C "$repo" describe --always --dirty 2>/dev/null || echo unknown)
 
 failed=0
