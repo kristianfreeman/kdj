@@ -166,20 +166,17 @@ impl Browser {
         self.footer(f, atlas, s, status);
     }
 
-    /// Breadcrumbs, trimmed from the left if they don't fit, and the item count.
+    /// Breadcrumbs, whole levels dropped from the left if they don't fit,
+    /// and the item count.
     fn breadcrumbs(&mut self, f: &mut Frame, atlas: &Atlas) {
         let text = &mut self.text;
-        text.clear();
-        for (i, l) in self.levels.iter().enumerate() {
-            if i > 0 {
-                text.push_str("  ›  ");
-            }
-            text.push_str(&l.title);
-        }
         if self.levels.is_empty() {
+            text.clear();
             text.push_str(if self.scanning { "Reading library…" } else { "Plug in a Rekordbox USB stick" });
+        } else {
+            let titles: Vec<&str> = self.levels.iter().map(|l| l.title.trim()).collect();
+            fit_path(text, &titles, atlas, Style::Body, WIDTH - 200.0);
         }
-        trim_left(text, atlas, Style::Body, WIDTH - 200.0);
         if self.levels.len() > 1 {
             f.touch.add([0.0, 0.0, WIDTH - 180.0, 46.0], Target::Back);
         }
@@ -196,7 +193,13 @@ impl Browser {
 
     /// The visible rows of the current level, and where they sit in it.
     fn list(&mut self, f: &mut Frame, atlas: &Atlas) {
-        let Some(level) = self.levels.last() else { return };
+        let Some(level) = self.levels.last() else {
+            if !self.scanning {
+                let hint = "Or put one in another kdj on the network: it shows up here too";
+                atlas.draw(f, Style::Body, WIDTH / 2.0, HEIGHT / 2.0, Align::Center, hint, DIM);
+            }
+            return;
+        };
         if level.items.is_empty() {
             let text = &mut self.text;
             text.clear();
@@ -319,6 +322,28 @@ fn track_row(f: &mut Frame, atlas: &Atlas, text: &mut String, y: f32, r: &Row, (
 }
 
 /// Drop characters from the left of `text`, behind one ellipsis, until it fits `max_w`.
+/// `titles` joined with `›` into `text`, dropping whole levels from the left
+/// (shown as `…`) until it fits in `max_w`: "… › HOUSE NYC › Pbar Nov 23",
+/// never half a name. A last level too long on its own is cut from its left.
+fn fit_path(text: &mut String, titles: &[&str], atlas: &Atlas, style: Style, max_w: f32) {
+    for skip in 0..titles.len() {
+        text.clear();
+        if skip > 0 {
+            text.push_str("…  ›  ");
+        }
+        for (i, t) in titles[skip..].iter().enumerate() {
+            if i > 0 {
+                text.push_str("  ›  ");
+            }
+            text.push_str(t);
+        }
+        if atlas.width_of(style, text) <= max_w {
+            return;
+        }
+    }
+    trim_left(text, atlas, style, max_w);
+}
+
 fn trim_left(text: &mut String, atlas: &Atlas, style: Style, max_w: f32) {
     while atlas.width_of(style, text) > max_w && text.chars().count() > 2 {
         let skip = usize::from(text.starts_with('…')) + 1;
@@ -359,6 +384,20 @@ pub fn level_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_paths_drop_whole_levels_from_the_left() {
+        let atlas = Atlas::new(1.0);
+        let mut text = String::new();
+        let titles = ["Sources", "USB · REKORDBOX", "PBAR CURRENT", "HOUSE NYC", "HOUSE PLAYLISTS", "Horoom April 24"];
+        fit_path(&mut text, &titles, &atlas, Style::Body, 600.0);
+        assert!(text.starts_with("…  ›  ") && text.ends_with("  ›  Horoom April 24"), "{text}");
+        let shown: Vec<_> = text.split("  ›  ").skip(1).collect();
+        assert!(shown.iter().all(|t| titles.contains(t)), "only whole names: {text}");
+        assert!(atlas.width_of(Style::Body, &text) <= 600.0);
+        fit_path(&mut text, &titles[..2], &atlas, Style::Body, 600.0);
+        assert_eq!(text, "Sources  ›  USB · REKORDBOX", "fits: all of it");
+    }
 
     #[test]
     fn long_breadcrumbs_are_trimmed_from_the_left() {

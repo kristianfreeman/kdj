@@ -1,5 +1,5 @@
 # One place for the checks. `make check` before pushing; `make full` rarely.
-.PHONY: check lint fmt test test-full perf scenarios full linux image card flash
+.PHONY: check lint fmt test test-full perf scenarios full linux image card flash screens hooks
 
 check: lint test scenarios
 
@@ -26,6 +26,15 @@ scenarios:
 # Perf budgets (perf-budgets.toml); exits non-zero if anything is over.
 perf:
 	cargo run -q --release -p kdj-sim -- perf
+
+# Every screen at the panel's own 800x480 into docs/screens, with a README
+# GitHub shows as a gallery. The pre-commit hook does it when the UI changes.
+screens:
+	cargo run -q --release -p kdj-sim -- story docs/screens --scale 1
+
+# Use the repository's git hooks (.githooks): screens redrawn on commit.
+hooks:
+	git config core.hooksPath .githooks
 
 # Lint, test and build on Linux arm64 (the Pi) in Docker.
 linux:

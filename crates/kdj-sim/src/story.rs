@@ -1,10 +1,15 @@
 //! Storybook: every screen the deck has, in the states that matter, rendered
 //! by the real UI code into one HTML page.
 //!
-//!   kdj-sim story [DIR]     (default target/storybook; open index.html)
+//!   kdj-sim story [DIR] [--scale N]   (default target/storybook at 2×;
+//!                                      open index.html)
 //!
-//! Reproducible: synthetic tracks, the bundled test exports for the
-//! browser (not your own collection), fixed times.
+//! Reproducible, to the byte: synthetic tracks, the bundled test exports
+//! for the browser (not your own collection), fixed times. Each screen's
+//! file is named after it (`deck-playing.png`), and a screen that's gone
+//! takes its file with it, so a folder of them can live in git and show what
+//! a change did to every screen: `make screens` keeps `docs/screens` (at the
+//! panel's own 800×480), with a `README.md` GitHub shows as a gallery.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -38,7 +43,8 @@ struct Book {
 
 impl Book {
     fn add(&mut self, group: &'static str, name: &'static str, note: &'static str) -> PathBuf {
-        let file = format!("{:02}-{}.png", self.stories.len(), slug(name));
+        let file = format!("{}-{}.png", slug(group), slug(name));
+        assert!(!self.stories.iter().any(|s| s.file == file), "two screens called {group} / {name}");
         let path = self.out.join(&file);
         self.stories.push(Story { group, name, note, file });
         path
@@ -54,14 +60,24 @@ impl Book {
 
 pub fn run(opts: &Opts) -> Result<bool> {
     let out = PathBuf::from(opts.positional.first().map_or("target/storybook", String::as_str));
+    let scale: f32 = opts.flag("scale").unwrap_or("2").parse()?;
     std::fs::create_dir_all(&out)?;
     let t = std::time::Instant::now();
-    let mut book = Book { out: out.clone(), screen: Screen::new(2.0)?, stories: Vec::new() };
+    let mut book = Book { out: out.clone(), screen: Screen::new(scale)?, stories: Vec::new() };
     deck_stories(&mut book)?;
     browser_stories(&mut book)?;
     settings_stories(&mut book)?;
     mapping_stories(&mut book)?;
+    // Screens that are gone go too (and files from before names were stable).
+    for e in std::fs::read_dir(&out)?.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let png = e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("png"));
+        if png && !book.stories.iter().any(|s| s.file == name) {
+            std::fs::remove_file(e.path())?;
+        }
+    }
     std::fs::write(out.join("index.html"), html(&book.stories))?;
+    std::fs::write(out.join("README.md"), markdown(&book.stories))?;
     println!(
         "wrote {} stories to {} in {:.1} s",
         book.stories.len(),
@@ -256,7 +272,7 @@ fn settings_stories(book: &mut Book) -> Result<()> {
         link_peers: Some(1),
         controller: "XONE:K3 · connected".into(),
         deck: 0,
-        decks: "kdj-oak-pike B (controller)".into(),
+        decks: "kdj-oak-pike deck B (controller)".into(),
         wifi_on: Some(true),
         wifi: "Home · 72% · 192.168.1.31".into(),
         ethernet: "192.168.1.20".into(),
@@ -320,10 +336,8 @@ fn mapping_stories(book: &mut Book) -> Result<()> {
         if let Some(cfg) = cfg {
             s.set_mapping(&Diagram::new(cfg));
         }
-        // Controller › Mapping › Show.
-        s.move_by(3);
-        s.sideways(1);
-        s.move_by(2);
+        // Controller › Mapping › Show, wherever that page is.
+        assert!(s.go_to(settings::Key::Mapping), "a Mapping row");
         s.enter();
         let file = book.add("Mapping", name, note);
         book.screen.save_settings_png(&file, &mut s, "")?;
@@ -331,8 +345,29 @@ fn mapping_stories(book: &mut Book) -> Result<()> {
     Ok(())
 }
 
+/// "+6% on ±16, key lock off" is `6-on-16-key-lock-off`.
 fn slug(name: &str) -> String {
-    name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect()
+    let dashed: String =
+        name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
+    dashed.split('-').filter(|w| !w.is_empty()).collect::<Vec<_>>().join("-")
+}
+
+/// The same screens as a Markdown page: a gallery on GitHub, next to them.
+fn markdown(stories: &[Story]) -> String {
+    let mut m = String::from(
+        "# Screens\n\nEvery screen of the deck at the panel's own 800×480, drawn by the real UI code \
+         (`kdj-sim story`). `make screens` redraws them; the pre-commit hook does when the UI changes, \
+         so each commit shows what it did to them.\n",
+    );
+    let mut group = "";
+    for s in stories {
+        if s.group != group {
+            group = s.group;
+            let _ = write!(m, "\n## {group}\n");
+        }
+        let _ = write!(m, "\n**{}**: {}\n\n![{}]({})\n", s.name, s.note, s.name, s.file);
+    }
+    m
 }
 
 fn esc(s: &str) -> String {

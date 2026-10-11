@@ -164,6 +164,12 @@ service's limits allow; the log says whether it did.
 
 ## Simulate
 
+Every screen, as the Pi's 800×480 panel shows it, is in
+[`docs/screens`](docs/screens/README.md). `make hooks` once per clone turns
+on the pre-commit hook that redraws them whenever a commit touches the code,
+so each commit's diff shows what it did to every screen; `make screens`
+redraws them by hand.
+
 Everything except the window and the sound card runs headless in `kdj-sim`:
 
 ```bash

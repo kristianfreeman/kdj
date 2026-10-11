@@ -1,0 +1,12 @@
+#!/bin/sh
+# Redraw docs/screens when a commit touches anything they're drawn from, and
+# put the new pictures in the same commit: its diff then shows what it did
+# to every screen (GitHub shows changed images side by side). Rendering is
+# reproducible to the byte, so screens that didn't change don't show up.
+# Drawn from the working tree. SKIP_SCREENS=1 git commit ... skips it.
+set -e
+[ -z "$SKIP_SCREENS" ] || exit 0
+git diff --cached --name-only | grep -qE '^(crates/|config/|assets/|Cargo\.lock)' || exit 0
+echo "pre-commit: redrawing docs/screens"
+make -s screens >/dev/null
+git add -A docs/screens

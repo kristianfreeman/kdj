@@ -255,7 +255,11 @@ impl Scene {
         f.rect(mx - 4.0, y - 3.0, 8.0, 16.0, BG);
         f.rect(mx - 3.0, y - 2.0, 6.0, 14.0, FG);
         text.clear();
-        let _ = write!(text, "{ms:+.1} ms{against}  ·  {dbpm:+.2} BPM");
+        // Locked reads 0.0 and 0.00, never "-0.0": no sign on what rounds to zero.
+        let ms = if ms.abs() < 0.05 { 0.0 } else { ms };
+        let dbpm = if dbpm.abs() < 0.005 { 0.0 } else { dbpm };
+        let sign = |v: f64| if v > 0.0 { "+" } else { "" };
+        let _ = write!(text, "{}{ms:.1} ms{against}  ·  {}{dbpm:.2} BPM", sign(ms), sign(dbpm));
         let w = atlas.width_of(Style::Label, text);
         f.rect(label_x - 4.0, y - 3.0, w + 8.0, 16.0, alpha(BG, 210));
         atlas.draw(f, Style::Label, label_x, y + 10.0, Align::Left, text, FG);
@@ -518,14 +522,19 @@ fn hot_cue_flags(frame: &mut Frame, atlas: &Atlas, tl: Timeline, snap: &Snapshot
     }
 }
 
-/// Cue: a triangle on the bottom edge at `cx`, outlined against the waveform.
+/// Cue: a triangle on the bottom edge at `cx`, outlined against the
+/// waveform, and an outlined "C" flag beside it: beside, not on, the line,
+/// so the playhead (parked on the cue when stopped) never covers it. Hot
+/// cues are filled flags at the top; the cue's is hollow, at the bottom.
 fn cue_marker(frame: &mut Frame, atlas: &Atlas, cx: f32) {
     let [x, y, w, h] = DETAIL;
     if (x..x + w).contains(&cx) {
         let base = y + h;
         frame.tri([cx - 11.0, base], [cx + 11.0, base], [cx, base - 17.0], BG);
         frame.tri([cx - 8.0, base], [cx + 8.0, base], [cx, base - 13.0], FG);
-        atlas.draw(frame, Style::Label, cx, base - 20.0, Align::Center, "C", FG);
+        frame.rect(cx + 4.0, base - 39.0, 18.0, 18.0, BG);
+        frame.outline([cx + 5.0, base - 38.0, 16.0, 16.0], 1.0, FG);
+        atlas.draw(frame, Style::Label, cx + 13.0, base - 25.0, Align::Center, "C", FG);
     }
 }
 

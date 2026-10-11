@@ -256,6 +256,15 @@ impl Settings {
         })
     }
 
+    /// Highlight `key`'s row, on whichever page it is. False if there's none.
+    pub fn go_to(&mut self, key: Key) -> bool {
+        let found =
+            self.pages.iter().enumerate().find_map(|(p, page)| Some((p, page.rows.iter().position(|r| r.key == key)?)));
+        let Some((page, row)) = found else { return false };
+        (self.page, self.row, self.column) = (page, row, Column::Rows);
+        true
+    }
+
     /// Show `option` as `key`'s choice (the app changed it, not a tap).
     pub fn set_choice(&mut self, key: Key, option: usize) {
         if let Some(Value::Choice { options, selected }) = self.value_mut(key)
