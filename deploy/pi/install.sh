@@ -73,6 +73,9 @@ rm -f "$sudoers"
 
 install -m 644 "$here/kdj.service" "$here/kdj-usb@.service" "$here/kdj-name.service" /etc/systemd/system/
 install -m 644 "$here/99-kdj-usb.rules" /etc/udev/rules.d/
+# A cable straight to another kdj: link-local addresses when there's no DHCP.
+install -d /etc/NetworkManager/conf.d
+install -m 644 "$here/nm-kdj.conf" /etc/NetworkManager/conf.d/kdj.conf
 # No boot status on any screen, whatever happens to cmdline.txt.
 install -d /etc/systemd/system.conf.d
 printf '[Manager]\nShowStatus=no\n' >/etc/systemd/system.conf.d/kdj.conf

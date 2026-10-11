@@ -91,6 +91,7 @@ for u in getty@tty1.service autovt@tty1.service bluetooth.service apt-daily.time
     printf '%-40s %s\n' "$u" "$(systemctl is-enabled "$u" 2>/dev/null || true)"
 done
 systemctl is-enabled kdj.service | grep -qx enabled || fail "kdj.service not enabled"
+NetworkManager --print-config | grep -qx 'ipv4.link-local=4' || fail "NetworkManager doesn't read the link-local fallback"
 # The service's controller mapping is there (a missing one stops kdj starting).
 map=$(sed -n '/^KDJ_ARGS=/s/.*--midi \([^ "]*\).*/\1/p' /etc/kdj/kdj.env)
 [ -z "$map" ] || [ -f "$map" ] || fail "kdj.env's --midi $map isn't installed"
