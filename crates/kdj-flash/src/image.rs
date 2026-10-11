@@ -10,6 +10,32 @@ use sha2::{Digest, Sha256};
 
 use crate::ui;
 
+/// An image built from older code than the checkout's (`Image::behind`).
+#[derive(Debug)]
+pub struct Behind {
+    /// The commit it was built from ("494cca8", or "…-dirty" for
+    /// uncommitted changes on top of it).
+    pub built: String,
+    pub head: String,
+    /// Commits since, if git knows.
+    pub commits: Option<usize>,
+    pub repo: PathBuf,
+}
+
+impl Behind {
+    /// "built from 494cca8, 2 commits behind the code (70fbe2c)".
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let how_far = match self.commits {
+            Some(0) => "built from uncommitted changes".to_owned(),
+            Some(1) => "1 commit behind the code".to_owned(),
+            Some(n) => format!("{n} commits behind the code"),
+            None => "not built from the code here".to_owned(),
+        };
+        format!("built from {}, {how_far} ({})", self.built, self.head)
+    }
+}
+
 #[derive(Debug)]
 pub struct Image {
     pub path: PathBuf,
@@ -33,6 +59,27 @@ impl Image {
         let info = side("info").map(|t| crate::inspect::key_values(&t)).unwrap_or_default();
         let sha256 = side("sha256").and_then(|t| t.split_whitespace().next().map(str::to_ascii_lowercase));
         Ok(Self { path: path.to_path_buf(), name, info, sha256, compressed })
+    }
+
+    /// Where the image stands against the code it was built from, if it's
+    /// in a git checkout (as `make image` leaves it): None when it's of the
+    /// latest commit.
+    #[must_use]
+    pub fn behind(&self) -> Option<Behind> {
+        let built = self.info.get("commit")?;
+        let repo = self.path.ancestors().find(|d| d.join(".git").exists())?;
+        let git = |args: &[&str]| -> Option<String> {
+            let out = std::process::Command::new("git").arg("-C").arg(repo).args(args).output().ok()?;
+            out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        };
+        let head = git(&["rev-parse", "--short", "HEAD"])?;
+        let clean = built.strip_suffix("-dirty");
+        let base = clean.unwrap_or(built);
+        if clean.is_none() && head.starts_with(base) {
+            return None;
+        }
+        let commits = git(&["rev-list", "--count", &format!("{base}..HEAD")]).and_then(|n| n.parse().ok());
+        Some(Behind { built: built.clone(), head, commits, repo: repo.to_path_buf() })
     }
 
     /// Bytes once decompressed: from the .info file, or the xz index.

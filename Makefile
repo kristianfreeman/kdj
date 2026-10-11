@@ -1,5 +1,5 @@
 # One place for the checks. `make check` before pushing; `make full` rarely.
-.PHONY: check lint fmt test test-full perf scenarios full linux image card flash screens hooks
+.PHONY: check lint fmt test test-full perf scenarios full linux image card flash screens hooks deploy
 
 check: lint test scenarios
 
@@ -46,6 +46,11 @@ card:
 
 flash:
 	cargo run -q --release -p kdj-flash -- flash
+
+# This checkout's deck onto running kdj Pis over SSH (every one on the
+# network, or HOSTS="kdj-oak-pike.local ..."): seconds, no reflash.
+deploy:
+	tools/deploy.sh $(HOSTS)
 
 # Raspberry Pi 4 SD card image with the deck preinstalled, in Docker
 # (target/image/kdjos-rpi4-<date>.img.xz; see deploy/pi/README.md).

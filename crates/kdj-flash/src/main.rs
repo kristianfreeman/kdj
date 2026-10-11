@@ -249,6 +249,9 @@ fn list() -> Result<()> {
     for d in &disks {
         describe_disk(d, local.as_ref(), false);
     }
+    if let Some(b) = local.as_ref().and_then(Image::behind) {
+        ui::warn(&format!("The image here is out of date: {}. `make image` builds a fresh one.", b.describe()));
+    }
     Ok(())
 }
 
@@ -279,6 +282,8 @@ fn flash(a: &FlashArgs) -> Result<()> {
     let d = if a.to.is_some() { None } else { Some(pick(a.disk.as_deref(), true)?) };
     ui::heading("Image");
     describe_image(&img);
+    // Not when re-run under sudo (`checked`): the question was asked already.
+    let img = fresh_image(img, !a.yes && !a.checked)?;
     if !a.checked {
         img.verify()?;
         ui::ok("Checksum matches");
@@ -564,6 +569,40 @@ fn describe_image(img: &Image) {
             ui::field(key, v);
         }
     }
+    if let Some(b) = img.behind() {
+        ui::warn(&format!("Out of date: {}. `make image` builds a fresh one.", b.describe()));
+    }
+}
+
+/// An image that's behind the code: offer to build a fresh one first (and
+/// use that), unless told not to ask.
+fn fresh_image(img: Image, ask: bool) -> Result<Image> {
+    let Some(behind) = img.behind() else { return Ok(img) };
+    if !ask {
+        return Ok(img);
+    }
+    let build = dialoguer::Confirm::new()
+        .with_prompt("Build a fresh image from the code first? (make image: Docker, a couple of minutes)")
+        .default(true)
+        .interact()
+        .unwrap_or(false);
+    if !build {
+        ui::info("Flashing the older image.");
+        return Ok(img);
+    }
+    ui::heading("Building a fresh image");
+    let script = behind.repo.join("deploy/pi/image/build.sh");
+    let status = std::process::Command::new(&script).current_dir(&behind.repo).status();
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => bail!("the image build failed ({s}); see its output above"),
+        Err(e) => bail!("couldn't run {}: {e}", script.display()),
+    }
+    let fresh = image::newest().context("the build left no image")?;
+    let fresh = Image::open(&fresh)?;
+    ui::heading("Image");
+    describe_image(&fresh);
+    Ok(fresh)
 }
 
 fn describe_disk(d: &Disk, local: Option<&Image>, detail: bool) {

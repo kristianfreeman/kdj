@@ -93,6 +93,14 @@ to apply; `--user`, `--key`, `--hostname` change it, `--no-login` skips
 it, and `kdj-flash login` adds or replaces it on a card that's already
 flashed (applied at its next boot, booted before or not).
 
+`kdj-flash` says when the image here is older than the code (it reads the
+commit the image was built from) and offers to build a fresh one before
+flashing. For a Pi that's already running, `make deploy` is quicker: it
+builds the deck for the Pi and puts it, with the controller mappings, on
+every kdj announcing itself on the network over SSH, then restarts the deck
+(`make deploy HOSTS=kdj-oak-pike.local` for one; `tools/find-kdjs.py` lists
+them). Changes to the system set-up here still need an image.
+
 `--wifi NETWORK` (on `flash` or `login`) has the Pi join a Wi-Fi network
 too, alongside Ethernet. The password comes from your Mac's keychain
 (macOS asks to allow it) or is typed in unseen, and passes to the sudo'd
