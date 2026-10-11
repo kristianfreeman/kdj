@@ -25,9 +25,26 @@ name=kdjos-rpi4-$(date +%Y-%m-%d)
 containers=(kdj-image-prepare kdj-image-binary kdj-image-build)
 say() { printf '\n== %s\n' "$*"; }
 
+# One build at a time: builds share the containers' names and the work
+# image, so a second would kill the first's containers and overwrite its
+# image. Checked before the cleanup below is set, which would stop them.
+lock=$out/.building
+mkdir -p "$out"
+if ! mkdir "$lock" 2>/dev/null; then
+    pid=$(cat "$lock/pid" 2>/dev/null || true)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        echo "Another image build is running (pid $pid): wait for it, it'll leave the image in $out." >&2
+        exit 1
+    fi
+    rm -rf "$lock" # left by a build that died
+    mkdir "$lock"
+fi
+echo $$ >"$lock/pid"
+
 cleanup() {
     # Stopped, not killed: the image step unmounts and detaches on SIGTERM.
     for c in "${containers[@]}"; do docker stop -t 60 "$c" >/dev/null 2>&1 || true; done
+    rm -rf "$lock"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
