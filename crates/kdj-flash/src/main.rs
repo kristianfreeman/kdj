@@ -111,7 +111,7 @@ enum Cmd {
     },
     /// Write the deck image to a card and verify it
     Flash {
-        /// The image; the newest target/image/deck-*.img.xz if omitted
+        /// The image; the newest target/image/kdjos-*.img.xz if omitted
         image: Option<PathBuf>,
         /// The disk to write (disk4, sdb…); asks if there's more than one card
         #[arg(long)]
