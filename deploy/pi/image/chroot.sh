@@ -4,7 +4,7 @@
 # what it can without a Pi. Staged at /tmp/kdj-install:
 #   kdj                  the binary from build-binary.sh
 #   deploy/pi/...        this directory's parent (install.sh and its files)
-#   config/...           the example MIDI mapping
+#   config/...           the MIDI mappings (the Xone:K3's is the default)
 set -euo pipefail
 
 stage=/tmp/kdj-install
@@ -91,6 +91,9 @@ for u in getty@tty1.service autovt@tty1.service bluetooth.service apt-daily.time
     printf '%-40s %s\n' "$u" "$(systemctl is-enabled "$u" 2>/dev/null || true)"
 done
 systemctl is-enabled kdj.service | grep -qx enabled || fail "kdj.service not enabled"
+# The service's controller mapping is there (a missing one stops kdj starting).
+map=$(sed -n '/^KDJ_ARGS=/s/.*--midi \([^ "]*\).*/\1/p' /etc/kdj/kdj.env)
+[ -z "$map" ] || [ -f "$map" ] || fail "kdj.env's --midi $map isn't installed"
 for u in getty@tty1.service bluetooth.service apt-daily.timer; do
     s=$(systemctl is-enabled "$u" 2>/dev/null || true)
     [ "$s" != enabled ] || fail "$u still enabled"
@@ -113,7 +116,7 @@ visudo -c
 sudo -l -U kdj | tail -n 3
 ls -la /opt/kdj/bin /etc/kdj /media/kdj /var/lib/kdj
 cat /etc/kdj/kdj.env
-grep -q '^KDJ_ARGS="--device hifiberry --buffer 128"$' /etc/kdj/kdj.env || fail "kdj.env"
+grep -q '^KDJ_ARGS="--device hifiberry --buffer 128 --midi /etc/kdj/xone-k3.toml"$' /etc/kdj/kdj.env || fail "kdj.env"
 cat /etc/systemd/system.conf.d/kdj.conf
 
 say "Check: boot configuration"

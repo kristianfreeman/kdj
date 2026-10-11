@@ -124,9 +124,9 @@ build() {
     # Stage the binary and deploy/pi (install.sh and its files).
     local stage=$root/tmp/kdj-install
     rm -rf "$stage"
-    mkdir -p "$stage/deploy" "$stage/config"
+    mkdir -p "$stage/deploy"
     cp -a /src/deploy/pi "$stage/deploy/pi"
-    cp -a /src/config/midi-example.toml "$stage/config/"
+    cp -a /src/config "$stage/config"
     install -m 755 /out/build/kdj "$stage/kdj"
 
     say "Installing in the chroot"

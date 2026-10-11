@@ -206,8 +206,9 @@ mod platform {
     use super::{Disk, Partition, run, run_for};
 
     /// diskutil can hang asking a card reader about the whole disk; give up
-    /// and ask a partition instead.
-    const ASK: Duration = Duration::from_secs(5);
+    /// and ask a partition instead. Not too soon: with a few disk images
+    /// mounted (Time Machine, simulators) a plain `diskutil list` takes 5 s.
+    const ASK: Duration = Duration::from_secs(20);
 
     fn plist(args: &[&str]) -> Result<Value> {
         let out = run_for("diskutil", args, ASK)?;
