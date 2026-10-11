@@ -7,7 +7,13 @@ fn main() {
     let sources = std::env::args().nth(1).map_or_else(library::sources, |root| {
         let root = std::path::PathBuf::from(root);
         let pdb = Some(root.join("PIONEER/rekordbox/export.pdb")).filter(|p| p.is_file());
-        vec![Source { name: "given".into(), usbanlz: root.join("PIONEER/USBANLZ"), root: Some(root), pdb }]
+        vec![Source {
+            name: "given".into(),
+            usbanlz: root.join("PIONEER/USBANLZ"),
+            root: Some(root),
+            pdb,
+            remote: None,
+        }]
     });
     for s in sources {
         let t = std::time::Instant::now();

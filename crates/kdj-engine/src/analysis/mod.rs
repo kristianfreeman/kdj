@@ -69,7 +69,41 @@ pub fn load_file(path: &Path, sample_rate: u32) -> Result<(Track, LoadTimings)> 
 pub fn load_file_known(path: &Path, sample_rate: u32, known: Known) -> Result<(Track, LoadTimings)> {
     let t = Instant::now();
     let decoded = decode::decode(path, frame_budget(known.grid.is_none()))?;
-    let mut timings = LoadTimings { decode: t.elapsed(), ..Default::default() };
+    let title = path.file_stem().map_or_else(|| "untitled".into(), |s| s.to_string_lossy().into_owned());
+    prepare(decoded, t.elapsed(), title, sample_rate, known)
+}
+
+/// As `load_file_known`, from a whole file in memory (a track on another
+/// kdj): `ext` is its file type.
+///
+/// # Errors
+///
+/// If it can't be decoded, or resampling fails.
+///
+/// # Panics
+///
+/// If the beat-grid thread panics; the panic is passed on.
+pub fn load_bytes_known(
+    title: String,
+    bytes: Vec<u8>,
+    ext: Option<&str>,
+    sample_rate: u32,
+    known: Known,
+) -> Result<(Track, LoadTimings)> {
+    let t = Instant::now();
+    let decoded = decode::decode_bytes(bytes, ext, frame_budget(known.grid.is_none()))?;
+    prepare(decoded, t.elapsed(), title, sample_rate, known)
+}
+
+/// The rest of a load once the audio is decoded: resample, grid, waveform.
+fn prepare(
+    decoded: decode::Decoded,
+    decode_time: Duration,
+    title: String,
+    sample_rate: u32,
+    known: Known,
+) -> Result<(Track, LoadTimings)> {
+    let mut timings = LoadTimings { decode: decode_time, ..Default::default() };
     let src_rate = decoded.sample_rate;
     // The grid runs on mono at the file's rate; the stereo samples move on
     // to resampling without a copy.
@@ -102,7 +136,6 @@ pub fn load_file_known(path: &Path, sample_rate: u32, known: Known) -> Result<(T
         Ok((g, samples, waveform))
     })?;
 
-    let title = path.file_stem().map_or_else(|| "untitled".into(), |s| s.to_string_lossy().into_owned());
     let track = Track {
         id: next_id(),
         title,
@@ -146,12 +179,31 @@ pub const fn frame_budget(_with_grid: bool) -> Option<usize> {
     None
 }
 
+/// Memory a load can use, in bytes, as `frame_budget` counts it: for
+/// refusing a file from another kdj before fetching it.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn bytes_free() -> Option<u64> {
+    free_from_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub const fn bytes_free() -> Option<u64> {
+    None
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn free_from_meminfo(info: &str) -> Option<u64> {
+    let kb: u64 =
+        info.lines().find_map(|l| l.strip_prefix("MemAvailable:"))?.trim().strip_suffix("kB")?.trim().parse().ok()?;
+    Some(kb.saturating_mul(1024).saturating_sub(LOAD_HEADROOM_BYTES))
+}
+
 #[cfg(any(target_os = "linux", test))]
 /// The frame budget from `/proc/meminfo`'s text.
 fn budget_from_meminfo(info: &str, with_grid: bool) -> Option<usize> {
-    let kb: u64 =
-        info.lines().find_map(|l| l.strip_prefix("MemAvailable:"))?.trim().strip_suffix("kB")?.trim().parse().ok()?;
-    let bytes = kb.saturating_mul(1024).saturating_sub(LOAD_HEADROOM_BYTES);
+    let bytes = free_from_meminfo(info)?;
     let per_frame = LOAD_BYTES_PER_FRAME + if with_grid { GRID_BYTES_PER_FRAME } else { 0 };
     usize::try_from(bytes / per_frame).ok()
 }

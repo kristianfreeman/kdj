@@ -142,6 +142,18 @@ same way. `config/xone-k3.toml` splits a K3 down the middle, the same layout
 on each side; alone, a Pi plays from the left half (or the right, as B).
 The network wants to be wired: Wi-Fi adds latency to every press.
 
+### Sharing sticks, like Pro DJ Link
+
+Each kdj shares its USB sticks with the others, and browses theirs: the
+browser's sources list every stick on the network ("KRISTIAN · deck B"),
+and a track loads onto any deck whichever kdj its stick is in. It comes
+across whole and plays from memory, so the network and the stick can go
+once it's on (the deck says "from B"). The kdj with the stick says
+"KRISTIAN in use by B: leave it in" while another deck has a track from it
+or is loading one. `kdj --serve` shares a machine's library without being a
+deck: a laptop's Rekordbox collection, say. See `crates/kdj/src/share.rs`
+and `docs/plans/library-sharing.md`.
+
 ## Raspberry Pi
 
 [`deploy/pi`](deploy/pi/README.md) turns Raspberry Pi OS Lite into a deck:

@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use kdj_engine::BeatGrid;
 use kdj_engine::track::{Bands, Waveform};
 use kdj_engine::track::{HOT_CUES, HotCue};
@@ -43,11 +43,21 @@ pub struct Analysis {
 /// If the file can't be read or isn't an `ANLZ` file.
 pub fn read(dat: &Path) -> Result<Analysis> {
     let bytes = files::read_capped(dat, files::MAX_ANLZ_BYTES)?;
+    let ext = files::read_capped(&dat.with_extension("EXT"), files::MAX_ANLZ_BYTES).ok();
+    parse(&bytes, ext.as_deref()).with_context(|| dat.display().to_string())
+}
+
+/// An analysis from its files' bytes: the `.DAT`, and the `.EXT` if there is
+/// one (a track on another kdj, or `read`).
+///
+/// # Errors
+/// If it isn't a Rekordbox analysis file.
+pub fn parse(bytes: &[u8], ext: Option<&[u8]>) -> Result<Analysis> {
     if bytes.get(..4) != Some(b"PMAI".as_slice()) {
-        bail!("{} isn't a Rekordbox analysis file", dat.display());
+        bail!("not a Rekordbox analysis file");
     }
     let mut a = Analysis::default();
-    for (tag, header, body) in sections(&bytes) {
+    for (tag, header, body) in sections(bytes) {
         match &tag {
             b"PPTH" => a.audio = utf16_be(body),
             b"PQTZ" => a.beats = beats(body),
@@ -57,8 +67,7 @@ pub fn read(dat: &Path) -> Result<Analysis> {
     }
     // The `.EXT` file's extended list has all eight hot cues (the `.DAT`
     // list stops at C), so it wins whenever it has any.
-    let ext = files::read_capped(&dat.with_extension("EXT"), files::MAX_ANLZ_BYTES).ok();
-    if let Some((memory_cues, hot_cues)) = ext.as_deref().and_then(extended_cues) {
+    if let Some((memory_cues, hot_cues)) = ext.and_then(extended_cues) {
         a.memory_cues = memory_cues;
         a.hot_cues = hot_cues;
     }
@@ -254,7 +263,16 @@ pub struct Prepared {
 /// Read a track's Rekordbox analysis for playback at `sample_rate`.
 #[must_use]
 pub fn prepared(dat: &Path, sample_rate: u32) -> Option<Prepared> {
-    let a = read(dat).ok()?;
+    let [bytes, ext, ex2] =
+        ["DAT", "EXT", "2EX"].map(|x| files::read_capped(&dat.with_extension(x), files::MAX_ANLZ_BYTES).ok());
+    prepared_from(&bytes?, ext.as_deref(), ex2.as_deref(), sample_rate)
+}
+
+/// As `prepared`, from the bytes of the `.DAT` file and, if there are
+/// any, the `.EXT` and `.2EX` (a track on another kdj).
+#[must_use]
+pub fn prepared_from(dat: &[u8], ext: Option<&[u8]>, ex2: Option<&[u8]>, sample_rate: u32) -> Option<Prepared> {
+    let a = parse(dat, ext).ok()?;
     let grid = a.grid(sample_rate).map(|g| g.grid);
     let frames = |ms: u32| f64::from(ms) / 1000.0 * f64::from(sample_rate);
     let load_cue = a.memory_cues.iter().min().map(|&ms| frames(ms));
@@ -266,15 +284,14 @@ pub fn prepared(dat: &Path, sample_rate: u32) -> Option<Prepared> {
             *cue = Some(HotCue { start: frames(start), end: end.map(frames) });
         }
     }
-    Some(Prepared { grid, waveform: waveform_3band(dat, sample_rate), load_cue, hot_cues })
+    Some(Prepared { grid, waveform: ex2.and_then(|b| waveform_3band(b, sample_rate)), load_cue, hot_cues })
 }
 
-/// The CDJ-3000 3-band detail waveform (`PWV7` in the `.2EX` file): 150
-/// columns a second, one byte each for mid, high and low, 0–127.
+/// The CDJ-3000 3-band detail waveform (`PWV7` in the `.2EX` file's bytes):
+/// 150 columns a second, one byte each for mid, high and low, 0–127.
 #[must_use]
-pub fn waveform_3band(dat: &Path, sample_rate: u32) -> Option<Waveform> {
-    let bytes = files::read_capped(&dat.with_extension("2EX"), files::MAX_ANLZ_BYTES).ok()?;
-    let body = section(&bytes, *b"PWV7")?;
+pub fn waveform_3band(ex2: &[u8], sample_rate: u32) -> Option<Waveform> {
+    let body = section(ex2, *b"PWV7")?;
     let columns = body
         .as_chunks::<3>()
         .0

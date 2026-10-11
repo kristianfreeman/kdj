@@ -1,6 +1,13 @@
 # Plan: browsing and loading tracks from other kdjs
 
-Status: proposed, not started (2026-10-11).
+Status: phases 1–3 built (2026-10-11): sharing, browsing and loading
+across kdjs, `kdj --serve`, "from B" on the deck and the lending warning.
+Phase 4 (direct-cable link-local, stream decoding) is still to do.
+
+As built, the library service (`crates/kdj/src/share.rs`) is hand-rolled
+HTTP/1.1, whole-file transfers (no range requests yet), and every kdj
+shares by default. The hello (`net.rs`) carries the library port and stamp,
+and where each deck's track came from, which drives the lending warning.
 
 ## Goal
 

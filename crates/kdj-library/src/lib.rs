@@ -5,3 +5,4 @@ pub mod files;
 pub mod library;
 pub mod nav;
 pub mod pdb;
+pub mod shared;

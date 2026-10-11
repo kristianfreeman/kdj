@@ -146,6 +146,14 @@ fn deck_stories(book: &mut Book) -> Result<()> {
     sim.run_until(42.0);
     book.deck("Alone on Link, not synced", "The phase meter reads against the session.", &mut sim, "")?;
 
+    let mut sim = playing(&track, 42.0)?;
+    book.screen.ui.view.from = Some("B".into());
+    book.deck("A track from deck B's stick", "Loaded across the network; it plays from memory.", &mut sim, "")?;
+    book.screen.ui.view.from = None;
+    book.screen.ui.view.lending = Some("KRISTIAN in use by B: leave it in".into());
+    book.deck("Lending this stick", "Deck B has a track from the stick in this kdj: bright, not dim.", &mut sim, "")?;
+    book.screen.ui.view.lending = None;
+
     let mut sim = playing(&track, 41.0)?;
     if let Some(c) = sim.controller.as_mut() {
         c.tempo_fader(-5.0 / 8.0);
@@ -208,6 +216,7 @@ fn browser_stories(book: &mut Book) -> Result<()> {
         usbanlz: demo.join("PIONEER/USBANLZ"),
         pdb: Some(demo.join("PIONEER/rekordbox/export.pdb")),
         root: Some(demo),
+        remote: None,
     };
     let libs: Vec<_> = [fake_stick(150)?, demo].iter().map(library::scan).collect();
     let mut sim = playing(&Arc::new(silent_track(240)), 0.5)?;

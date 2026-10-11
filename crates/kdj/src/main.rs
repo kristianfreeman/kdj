@@ -5,13 +5,16 @@
 //!        [--hud] [--midi FILE] [--midi-port NAME] [--no-link] [--deck LETTER]
 //!   deck --midi-learn FILE [--midi-port NAME]  (write a MIDI mapping by touching each control)
 //!   deck --synth            (a synthetic techno track, no file needed)
+//!   deck --serve            (no screen or sound: share this machine's library)
 //!
 //! `--device` picks the audio output whose name contains NAME (the default
 //! output otherwise); `--midi-port` picks the MIDI input the same way,
 //! overriding the mapping file's `port`; `--no-link` stays out of Ableton
 //! Link sessions. `--deck B` makes this deck B among the kdjs on the network
 //! (else it takes the first letter free); a controller plugged into any of
-//! them plays each deck from its side of the mapping (see `net`).
+//! them plays each deck from its side of the mapping (see `net`). Each kdj
+//! shares its USB sticks with the others, and browses theirs (see `share`);
+//! `--serve` shares a library without being a deck (a laptop's collection).
 //!
 //! With no track it opens in the browser: sources, then playlists, then
 //! tracks (↵ opens or loads, ← backs out, Tab closes). Dropping a file on the
@@ -28,9 +31,11 @@ mod link;
 mod midi;
 mod net;
 mod rt;
+mod share;
 mod touch;
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -44,6 +49,7 @@ use kdj_engine::midimap::MidiMap;
 use kdj_engine::session::LocalSession;
 use kdj_engine::{Action, Edge, Engine, EngineConfig, EngineHandle, InputSender, Snapshot, Track};
 use kdj_library::nav::{self, Node};
+use kdj_library::shared::Remote;
 use kdj_library::{anlz, library};
 use kdj_ui::Ui;
 use kdj_ui::browser::{self, Browser};
@@ -56,6 +62,7 @@ use sdl2::mouse::MouseButton;
 #[global_allocator]
 static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
+#[expect(clippy::struct_excessive_bools, reason = "independent command-line switches")]
 struct Args {
     track: Option<PathBuf>,
     synth: bool,
@@ -76,6 +83,8 @@ struct Args {
     no_link: bool,
     /// This kdj's (first) deck among those on the network: 0 = A.
     deck: Option<usize>,
+    /// Only share this machine's library with the kdjs on the network.
+    serve: bool,
 }
 
 fn parse_args() -> Result<Args> {
@@ -93,6 +102,7 @@ fn parse_args() -> Result<Args> {
         device: None,
         no_link: false,
         deck: None,
+        serve: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -109,6 +119,7 @@ fn parse_args() -> Result<Args> {
             "--midi-port" => a.midi_port = Some(value()?),
             "--device" => a.device = Some(value()?),
             "--no-link" => a.no_link = true,
+            "--serve" => a.serve = true,
             "--deck" => a.deck = Some(deck_letter(&value()?)?),
             s if s.starts_with("--") => return Err(anyhow!("unknown option {s}")),
             s => a.track = Some(s.into()),
@@ -132,38 +143,90 @@ struct Loaded {
     track: Result<Track, String>,
     /// The browser entry it came from (`nav::track_id`), to mark as loaded.
     entry_id: Option<u64>,
+    /// The other kdj's source it came from.
+    from: Option<net::Use>,
 }
 
 /// Where a load should go and come back to.
 struct LoadJob {
     deck: usize,
-    path: PathBuf,
-    anlz_file: Option<PathBuf>,
+    what: Fetch,
     loaded_id: Option<u64>,
+}
+
+/// Where a track to load is.
+enum Fetch {
+    /// A file here, and its Rekordbox analysis if known.
+    File { path: PathBuf, anlz: Option<PathBuf> },
+    /// Track `n` of a source on another kdj.
+    Remote { at: Remote, n: usize, title: String, ext: String },
+}
+
+impl Fetch {
+    /// The other kdj's source it's on.
+    fn from(&self) -> Option<net::Use> {
+        match self {
+            Self::File { .. } => None,
+            Self::Remote { at, .. } => Some(net::Use { kdj: at.kdj.clone(), source: at.id }),
+        }
+    }
 }
 
 /// Load off the UI thread. Like a CDJ: a track Rekordbox prepared brings its
 /// own grid, waveform and load cue, so it's only decoded; anything else gets
-/// our fallback analysis and shows as "auto grid".
+/// our fallback analysis and shows as "auto grid". A track on another kdj
+/// comes across whole first.
 fn load_in_background(job: LoadJob, sr: u32, tx: mpsc::Sender<Loaded>) {
     std::thread::spawn(move || {
-        let dat = job.anlz_file.clone().or_else(|| anlz::find(&job.path));
-        let known = dat
-            .as_deref()
-            .and_then(|d| anlz::prepared(d, sr))
-            .map(|p| analysis::Known { grid: p.grid, waveform: p.waveform, load_cue: p.load_cue, hot_cues: p.hot_cues })
-            .unwrap_or_default();
-        let source = match (known.grid.is_some(), known.waveform.is_some()) {
-            (true, true) => "Rekordbox grid and waveform",
-            (true, false) => "Rekordbox grid, our waveform",
-            _ => "not in Rekordbox: analysed here",
+        let known = |p: Option<anlz::Prepared>| {
+            p.map(|p| analysis::Known {
+                grid: p.grid,
+                waveform: p.waveform,
+                load_cue: p.load_cue,
+                hot_cues: p.hot_cues,
+            })
+            .unwrap_or_default()
         };
-        let track = analysis::load_file_known(&job.path, sr, known).map(|(t, timings)| {
+        let started = Instant::now();
+        let from = job.what.from();
+        let track = match job.what {
+            Fetch::File { path, anlz } => {
+                let dat = anlz.or_else(|| anlz::find(&path));
+                let known = known(dat.as_deref().and_then(|d| anlz::prepared(d, sr)));
+                let source = describe_known(&known);
+                analysis::load_file_known(&path, sr, known).map(|t| (t, source))
+            }
+            Fetch::Remote { at, n, title, ext } => share::fetch_track(&at, n).and_then(|f| {
+                let fetched = started.elapsed();
+                let prepared =
+                    f.dat.as_deref().and_then(|d| anlz::prepared_from(d, f.ext.as_deref(), f.ex2.as_deref(), sr));
+                let known = known(prepared);
+                let source = describe_known(&known);
+                eprintln!(
+                    "fetched {title} from {} in {:.0} ms ({} KB)",
+                    at.kdj,
+                    fetched.as_secs_f64() * 1000.0,
+                    f.audio.len() >> 10
+                );
+                analysis::load_bytes_known(title, f.audio, Some(&ext), sr, known).map(|t| (t, source))
+            }),
+        };
+        let track = track.map(|((t, timings), source)| {
             eprintln!("loaded {} in {:.0} ms ({source})", t.title, timings.total().as_secs_f64() * 1000.0);
             t
         });
-        let _ = tx.send(Loaded { deck: job.deck, track: track.map_err(|e| format!("{e:#}")), entry_id: job.loaded_id });
+        let track = track.map_err(|e| format!("{e:#}"));
+        let _ = tx.send(Loaded { deck: job.deck, track, entry_id: job.loaded_id, from });
     });
+}
+
+/// What Rekordbox gave a load, for the log.
+const fn describe_known(known: &analysis::Known) -> &'static str {
+    match (known.grid.is_some(), known.waveform.is_some()) {
+        (true, true) => "Rekordbox grid and waveform",
+        (true, false) => "Rekordbox grid, our waveform",
+        _ => "not in Rekordbox: analysed here",
+    }
 }
 
 fn synth_in_background(deck: usize, bpm: f64, sr: u32, tx: mpsc::Sender<Loaded>) {
@@ -171,7 +234,7 @@ fn synth_in_background(deck: usize, bpm: f64, sr: u32, tx: mpsc::Sender<Loaded>)
         let seed = u32::try_from(deck).map_or(1, |d| d.saturating_add(1));
         let spec = SynthSpec { sample_rate: sr, bars: 160, bpm, seed, ..Default::default() };
         let (t, _) = analysis::build(format!("Synthetic hardgroove {bpm} bpm"), analysis::synth::render(&spec), sr);
-        let _ = tx.send(Loaded { deck, track: Ok(t), entry_id: None });
+        let _ = tx.send(Loaded { deck, track: Ok(t), entry_id: None, from: None });
     });
 }
 
@@ -228,12 +291,47 @@ struct Slot {
     /// A track handed to the engine and not yet on the deck. The engine
     /// still drops it if the deck started playing in the meantime.
     pending: Option<Pending>,
+    /// The other kdj's source the track on the deck came from, and the one
+    /// a load in progress is coming from: their sticks are in use.
+    from: Option<net::Use>,
+    fetching: Option<net::Use>,
 }
 
 struct Pending {
     track: Arc<Track>,
     entry_id: Option<u64>,
     since: Instant,
+    from: Option<net::Use>,
+}
+
+/// A fetch of the other kdjs' libraries: what they share, and the library
+/// services (with their stamps) that answered.
+type RemoteFetch = (Vec<library::Library>, Vec<(SocketAddr, u32)>);
+
+/// How often to look for changes in what the other kdjs share, and to ask
+/// one again that didn't answer (it may not have heard from this kdj yet).
+const REMOTE_EVERY: Duration = Duration::from_secs(3);
+
+/// The other kdjs' libraries, as fetched.
+struct Remotes {
+    /// The library services (and stamps) that answered the last fetch.
+    fetched: Vec<(SocketAddr, u32)>,
+    /// A fetch is under way.
+    fetching: bool,
+    /// When the last fetch started.
+    asked: Option<Instant>,
+    tx: mpsc::Sender<RemoteFetch>,
+    rx: mpsc::Receiver<RemoteFetch>,
+    /// Fetched, waiting for the DJ to finish browsing before it changes
+    /// what's listed.
+    waiting: Option<Vec<library::Library>>,
+}
+
+impl Remotes {
+    fn new() -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self { fetched: Vec::new(), fetching: false, asked: None, tx, rx, waiting: None }
+    }
 }
 
 /// How long a power off / restart press waits for its confirming second press.
@@ -255,7 +353,13 @@ struct App {
     settings: Settings,
     /// A power off / restart pressed once, waiting for the second press.
     armed: Option<(settings::Key, Instant)>,
+    /// This kdj's own sources, then the other kdjs'.
     libs: Vec<library::Library>,
+    /// How many of `libs` are this kdj's own.
+    own: usize,
+    remotes: Remotes,
+    /// Shares this kdj's own sources with the others.
+    server: Option<Arc<share::Server>>,
     /// The library node behind each browser item, level by level.
     nav: Vec<Vec<Node>>,
     /// Sources the current scan covered, to notice a stick going in.
@@ -272,6 +376,39 @@ struct App {
 }
 
 impl App {
+    /// The app on `slots`, on the network and sharing this kdj's library.
+    fn new(
+        args: &Args,
+        slots: Vec<Slot>,
+        info: &settings::SystemInfo,
+        (scan_tx, load_tx): (mpsc::Sender<Scan>, mpsc::Sender<Loaded>),
+        sample_rate: u32,
+        status: String,
+    ) -> Self {
+        let net = join_network(args);
+        Self {
+            slots,
+            focus: 0,
+            shared_focus: Arc::new(AtomicUsize::new(0)),
+            hud: Hud::new(args.hud),
+            browser: Browser::new(args.track.is_none() && !args.synth),
+            settings: Settings::new(settings::pages(&settings::Prefs::default(), info)),
+            armed: None,
+            libs: Vec::new(),
+            own: 0,
+            remotes: Remotes::new(),
+            server: share_library(net.clone()),
+            nav: Vec::new(),
+            scanned: Vec::new(),
+            scan_tx,
+            load_tx,
+            sample_rate,
+            status,
+            net,
+            net_shown: (u64::MAX, args.deck.unwrap_or(0)),
+        }
+    }
+
     /// Handle an action aimed at deck `target`.
     fn act(&mut self, a: Action, e: Edge, target: usize) {
         if !a.is_ui() {
@@ -412,14 +549,74 @@ impl App {
         if let Some(picked) = self.settings.choice(settings::Key::Deck).filter(|&d| d != shown) {
             net.claim(picked);
         }
+        net.set_using(self.slots.iter().flat_map(|s| s.from.iter().chain(&s.fetching)).cloned().collect());
+        self.take_remote_libraries();
+        if self.remotes.asked.is_none_or(|t| t.elapsed() >= REMOTE_EVERY) {
+            self.fetch_remote_libraries(&net.peers());
+        }
         let deck = net.decks().start;
         if net.epoch() == epoch && deck == shown {
             return;
         }
         self.net_shown = (net.epoch(), deck);
+        let peers = net.peers();
         self.settings.set_choice(settings::Key::Deck, deck);
-        self.settings.set_info(settings::Key::Decks, describe_peers(&net.peers()));
+        self.settings.set_info(settings::Key::Decks, describe_peers(&peers));
         self.label_decks();
+        self.show_sharing(net.name(), &peers);
+    }
+
+    /// Each deck's "from B", and on this kdj's decks a warning while another
+    /// deck depends on a stick here (loaded from it, or loading).
+    fn show_sharing(&mut self, me: &str, peers: &[net::PeerInfo]) {
+        let sources = self.server.as_ref().map_or_else(Vec::new, |s| s.sources());
+        let lending = share::lending(me, &sources, peers);
+        if lending.is_some() && lending != self.slots.first().and_then(|s| s.ui.view.lending.clone()) {
+            eprintln!("share: {}", lending.as_deref().unwrap_or_default());
+        }
+        for slot in &mut self.slots {
+            slot.ui.view.from = slot.from.as_ref().map(|u| share::who(peers, &u.kdj));
+            slot.ui.view.lending.clone_from(&lending);
+        }
+    }
+
+    /// Fetch the other kdjs' libraries when what they share has changed, or
+    /// one didn't answer last time.
+    fn fetch_remote_libraries(&mut self, peers: &[net::PeerInfo]) {
+        let wanted: Vec<_> = peers.iter().filter_map(|p| p.library).collect();
+        if self.remotes.fetching || wanted == self.remotes.fetched {
+            return;
+        }
+        self.remotes.fetching = true;
+        self.remotes.asked = Some(Instant::now());
+        let (peers, tx) = (peers.to_vec(), self.remotes.tx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(share::fetch_libraries(&peers));
+        });
+    }
+
+    /// Take fetched libraries from the other kdjs, once the DJ isn't deep in
+    /// the browser (the list changing under them would lose their place).
+    fn take_remote_libraries(&mut self) {
+        if let Ok((libs, answered)) = self.remotes.rx.try_recv() {
+            self.remotes.fetching = false;
+            self.remotes.fetched = answered;
+            let same = libs.iter().map(|l| &l.source.name).eq(self.libs[self.own..].iter().map(|l| &l.source.name))
+                && libs.iter().zip(&self.libs[self.own..]).all(|(a, b)| a.entries.len() == b.entries.len());
+            if !same {
+                self.remotes.waiting = Some(libs);
+            }
+        }
+        if self.browser.open && self.nav.len() > 1 {
+            return;
+        }
+        if let Some(libs) = self.remotes.waiting.take() {
+            let names: Vec<_> = libs.iter().map(|l| l.source.name.as_str()).collect();
+            eprintln!("share: other kdjs share {}", if names.is_empty() { "nothing".into() } else { names.join(", ") });
+            self.libs.truncate(self.own);
+            self.libs.extend(libs);
+            self.browse_from_the_top();
+        }
     }
 
     /// Open the highlighted folder or playlist; with `load`, a highlighted
@@ -432,14 +629,18 @@ impl App {
                     self.status = "Stop the deck to load".into();
                     return;
                 }
-                let Some(e) = self.libs.get(s).and_then(|l| l.entries.get(i)) else { return };
-                self.status = format!("Loading {}…", e.title);
-                let job = LoadJob {
-                    deck,
-                    path: e.audio.clone(),
-                    anlz_file: Some(e.anlz.clone()),
-                    loaded_id: Some(nav::track_id(e)),
+                let Some(lib) = self.libs.get(s) else { return };
+                let Some(e) = lib.entries.get(i) else { return };
+                let what = if let Some(at) = &lib.source.remote {
+                    self.status = format!("Loading {} from {}…", e.title, lib.source.name);
+                    let ext = e.audio.extension().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+                    Fetch::Remote { at: at.clone(), n: i, title: e.title.clone(), ext }
+                } else {
+                    self.status = format!("Loading {}…", e.title);
+                    Fetch::File { path: e.audio.clone(), anlz: Some(e.anlz.clone()) }
                 };
+                self.slots[deck].fetching = what.from();
+                let job = LoadJob { deck, what, loaded_id: Some(nav::track_id(e)) };
                 load_in_background(job, self.sample_rate, self.load_tx.clone());
             }
             (Node::Track(..), None) => {}
@@ -458,7 +659,7 @@ impl App {
             return;
         }
         self.status = format!("Analysing {}…", file_name(&p));
-        let job = LoadJob { deck: self.focus, path: p, anlz_file: None, loaded_id: None };
+        let job = LoadJob { deck: self.focus, what: Fetch::File { path: p, anlz: None }, loaded_id: None };
         load_in_background(job, self.sample_rate, self.load_tx.clone());
     }
 
@@ -469,10 +670,22 @@ impl App {
         }
     }
 
+    /// This kdj's own sources, scanned: shared, and listed before the others'.
     fn take_libraries(&mut self, scan: Scan) {
         self.scanned = scan.stamps;
+        if let Some(server) = &self.server {
+            server.share(&scan.libs);
+        }
+        let others = self.libs.split_off(self.own);
+        self.own = scan.libs.len();
         self.libs = scan.libs;
+        self.libs.extend(others);
         self.browser.scanning = false;
+        self.browse_from_the_top();
+    }
+
+    /// Back to the browser's top level, for a changed list of sources.
+    fn browse_from_the_top(&mut self) {
         if self.libs.is_empty() {
             self.browser.clear();
             self.nav.clear();
@@ -487,6 +700,7 @@ impl App {
     /// has taken it (see `settle_loads`).
     fn take_loaded(&mut self, loaded: Loaded) {
         let slot = &mut self.slots[loaded.deck];
+        slot.fetching = None;
         match loaded.track {
             Ok(t) => {
                 let t = Arc::new(t);
@@ -494,7 +708,8 @@ impl App {
                     self.status = "Stop the deck to load".into();
                     return;
                 }
-                slot.pending = Some(Pending { track: t, entry_id: loaded.entry_id, since: Instant::now() });
+                let (entry_id, from) = (loaded.entry_id, loaded.from);
+                slot.pending = Some(Pending { track: t, entry_id, since: Instant::now(), from });
             }
             Err(e) => self.status = format!("Couldn't load: {e}"),
         }
@@ -512,6 +727,9 @@ impl App {
                 slot.ui.set_track(&p.track);
                 slot.current = Some(p.track);
                 slot.loaded_id = p.entry_id;
+                slot.from = p.from;
+                // Show where it's from (and tell the other kdjs) right away.
+                self.net_shown.0 = u64::MAX;
                 if i == self.focus {
                     self.browser.loaded = p.entry_id;
                     self.browser.open = false;
@@ -532,6 +750,9 @@ fn run() -> Result<()> {
     let args = parse_args()?;
     if let Some(out) = &args.midi_learn {
         return midi::learn(out, args.midi_port.as_deref());
+    }
+    if args.serve {
+        return serve();
     }
     let keymap = match &args.keymap {
         Some(p) => Keymap::with_overrides(&std::fs::read_to_string(p)?)?,
@@ -557,24 +778,8 @@ fn run() -> Result<()> {
     let slots = screen.slots(handles)?;
     let mut events = screen.sdl.event_pump().map_err(|e| anyhow!(e))?;
 
-    let mut app = App {
-        slots,
-        focus: 0,
-        shared_focus: Arc::new(AtomicUsize::new(0)),
-        hud: Hud::new(args.hud),
-        browser: Browser::new(args.track.is_none() && !args.synth),
-        settings: Settings::new(settings::pages(&settings::Prefs::default(), &info)),
-        armed: None,
-        libs: Vec::new(),
-        nav: Vec::new(),
-        scanned: Vec::new(),
-        scan_tx,
-        load_tx,
-        sample_rate,
-        status,
-        net: join_network(&args),
-        net_shown: (u64::MAX, args.deck.unwrap_or(0)),
-    };
+    let channels = (scan_tx, load_tx);
+    let mut app = App::new(&args, slots, &info, channels, sample_rate, status);
     app.set_focus(0);
     let mut midi = start_midi(&args, midi_inputs, &app.shared_focus, app.net.clone(), &mut app.settings)?;
     let debug = std::env::var_os("KDJ_DEBUG_INPUT").is_some();
@@ -645,14 +850,42 @@ fn join_network(args: &Args) -> Option<Arc<net::Net>> {
         .ok()
 }
 
-/// The other kdjs, for the settings: "kdj-oak-pike B (controller)".
+/// `--serve`: no screen or sound, only this machine's library (a Rekordbox
+/// collection, USB exports) for the kdjs on the network, kept up to date as
+/// sticks come and go.
+fn serve() -> Result<()> {
+    let net = net::Net::start(hostname(), 0, None)?;
+    let server = share::Server::start(Some(net))?;
+    eprintln!("serve: sharing this machine's library as {} (port {})", hostname(), server.port());
+    let mut scanned = None;
+    loop {
+        let stamps = source_stamps();
+        if scanned.as_ref() != Some(&stamps) {
+            let libs: Vec<_> = library::sources().iter().map(library::scan).collect();
+            if libs.is_empty() {
+                eprintln!("serve: nothing to share yet (no Rekordbox collection or USB export here)");
+            }
+            server.share(&libs);
+            scanned = Some(stamps);
+        }
+        std::thread::sleep(Duration::from_secs(3));
+    }
+}
+
+/// Share this kdj's sticks with the others on the network.
+fn share_library(net: Option<Arc<net::Net>>) -> Option<Arc<share::Server>> {
+    net.as_ref()?;
+    share::Server::start(net).map_err(|e| eprintln!("share: can't share this kdj's library: {e}")).ok()
+}
+
+/// The other kdjs, for the settings: "kdj-oak-pike deck B (controller)".
 fn describe_peers(peers: &[net::PeerInfo]) -> String {
     if peers.is_empty() {
         return "None found".into();
     }
     let each = peers.iter().map(|p| {
         let plugged = if p.controller { " (controller)" } else { "" };
-        format!("{} {}{plugged}", p.name, net::letters(p.decks.clone()))
+        format!("{} {}{plugged}", p.name, net::role(p.decks.clone()))
     });
     each.collect::<Vec<_>>().join(", ")
 }
@@ -763,7 +996,7 @@ fn start_loading(args: &Args, sample_rate: u32, load_tx: &mpsc::Sender<Loaded>) 
             synth_in_background(deck, bpm, sample_rate, load_tx.clone());
         }
     } else if let Some(p) = &args.track {
-        let job = LoadJob { deck: 0, path: p.clone(), anlz_file: None, loaded_id: None };
+        let job = LoadJob { deck: 0, what: Fetch::File { path: p.clone(), anlz: None }, loaded_id: None };
         load_in_background(job, sample_rate, load_tx.clone());
         return format!("Analysing {}…", file_name(p));
     }
@@ -829,7 +1062,15 @@ impl Screen {
                 // SAFETY: the context `open` created is current on this
                 // thread, and SDL's loader returns that context's functions.
                 let gl = unsafe { glow::Context::from_loader_function(|s| self.video.gl_get_proc_address(s).cast()) };
-                Ok(Slot { deck, ui: Ui::new(gl, self.es, scale)?, current: None, loaded_id: None, pending: None })
+                Ok(Slot {
+                    deck,
+                    ui: Ui::new(gl, self.es, scale)?,
+                    current: None,
+                    loaded_id: None,
+                    pending: None,
+                    from: None,
+                    fetching: None,
+                })
             })
             .collect()
     }

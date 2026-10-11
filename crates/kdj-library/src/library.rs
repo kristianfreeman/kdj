@@ -21,6 +21,8 @@ pub struct Source {
     pub root: Option<PathBuf>,
     /// The export database, on a USB export.
     pub pdb: Option<PathBuf>,
+    /// On another kdj: its tracks come from there (see `shared`).
+    pub remote: Option<crate::shared::Remote>,
 }
 
 #[derive(Clone, Debug)]
@@ -66,14 +68,14 @@ pub struct Library {
 pub fn sources() -> Vec<Source> {
     let mut out = Vec::new();
     if let Some(dir) = anlz::local_usbanlz() {
-        out.push(Source { name: "Collection".into(), usbanlz: dir, root: None, pdb: None });
+        out.push(Source { name: "Collection".into(), usbanlz: dir, root: None, pdb: None, remote: None });
     }
     for mount in mount_points() {
         let usbanlz = mount.join("PIONEER/USBANLZ");
         let pdb = Some(mount.join("PIONEER/rekordbox/export.pdb")).filter(|p| p.is_file());
         if usbanlz.is_dir() || pdb.is_some() {
             let name = mount.file_name().map_or_else(|| "USB".into(), |n| n.to_string_lossy().into_owned());
-            out.push(Source { name, usbanlz, root: Some(mount), pdb });
+            out.push(Source { name, usbanlz, root: Some(mount), pdb, remote: None });
         }
     }
     out

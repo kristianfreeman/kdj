@@ -8,7 +8,7 @@ use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
-use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions};
+use symphonia::core::io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions};
 use symphonia::core::meta::MetadataOptions;
 
 pub struct Decoded {
@@ -38,9 +38,23 @@ impl std::fmt::Debug for Decoded {
 /// track, yields no audio at all, or is too long.
 pub fn decode(path: &Path, max_frames: Option<usize>) -> Result<Decoded> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
+    decode_from(Box::new(file), path.extension().and_then(|e| e.to_str()), max_frames)
+}
+
+/// As `decode`, from a whole file already in memory (a track on another
+/// kdj); `ext` is its file type, a hint for the format.
+///
+/// # Errors
+///
+/// As `decode`.
+pub fn decode_bytes(bytes: Vec<u8>, ext: Option<&str>, max_frames: Option<usize>) -> Result<Decoded> {
+    decode_from(Box::new(std::io::Cursor::new(bytes)), ext, max_frames)
+}
+
+fn decode_from(source: Box<dyn MediaSource>, ext: Option<&str>, max_frames: Option<usize>) -> Result<Decoded> {
+    let mss = MediaSourceStream::new(source, MediaSourceStreamOptions::default());
     let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = ext {
         hint.with_extension(ext);
     }
     let mut format = symphonia::default::get_probe()
@@ -91,7 +105,7 @@ pub fn decode(path: &Path, max_frames: Option<usize>) -> Result<Decoded> {
         }
     }
     if samples.is_empty() {
-        return Err(anyhow!("no audio decoded from {}", path.display()));
+        return Err(anyhow!("no audio in it"));
     }
     Ok(Decoded { samples, sample_rate, trimmed_delay })
 }

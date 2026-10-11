@@ -66,11 +66,16 @@ pub struct View {
     pub zoom: usize,
     /// Deck letter and whether the keyboard is on it, with more than one deck.
     pub tag: Option<(char, bool)>,
+    /// Where the track came from, if another kdj's stick: "B", or its name.
+    pub from: Option<String>,
+    /// This kdj's stick is in use by other decks: what to tell the DJ
+    /// ("KRISTIAN in use by B: leave it in"). Shown bright, over the rest.
+    pub lending: Option<String>,
 }
 
 impl Default for View {
     fn default() -> Self {
-        Self { zoom: 1, tag: None }
+        Self { zoom: 1, tag: None, from: None, lending: None }
     }
 }
 
@@ -166,14 +171,24 @@ impl Scene {
             x = left - 8.0;
         }
         x -= 8.0;
-        // Where the grid came from, and Link peers: plain text, not toggles.
+        // Where the track and grid came from, and Link peers: plain text, not
+        // toggles. A stick lent to other decks says so instead, brightly.
         let text = &mut self.text;
         text.clear();
-        text.push_str(if t.rekordbox_grid { "RB grid" } else { "auto grid" });
-        if let Some(peers) = s.link_peers {
-            let _ = write!(text, " · Link {peers}");
-        }
-        let src_w = atlas.draw(f, Style::Label, x, 27.0, Align::Right, text, DIM);
+        let colour = if let Some(lending) = &view.lending {
+            text.push_str(lending);
+            FG
+        } else {
+            if let Some(from) = &view.from {
+                let _ = write!(text, "from {from} · ");
+            }
+            text.push_str(if t.rekordbox_grid { "RB grid" } else { "auto grid" });
+            if let Some(peers) = s.link_peers {
+                let _ = write!(text, " · Link {peers}");
+            }
+            DIM
+        };
+        let src_w = atlas.draw(f, Style::Label, x, 27.0, Align::Right, text, colour);
         let title_w = x - src_w - 16.0 - title_x;
         atlas.draw_clipped(f, Style::Body, title_x, 27.0, title_w, t.title, FG);
         // The title opens the browser, like a CDJ's BROWSE button.

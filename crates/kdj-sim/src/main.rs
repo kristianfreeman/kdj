@@ -423,6 +423,7 @@ fn fake_stick(tracks: usize) -> Result<kdj_library::library::Source> {
         usbanlz: root.join("PIONEER/USBANLZ"),
         root: Some(root),
         pdb: Some(pdb),
+        remote: None,
     })
 }
 

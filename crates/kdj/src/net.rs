@@ -18,7 +18,7 @@
 //! in the settings outranks every claim seen so far; equal stamps go by name.
 //! The other moves to the first letter free.
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
@@ -31,7 +31,7 @@ const GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 75, 74);
 const PORT: u16 = 47_474;
 /// Every packet starts with this (and a kind byte), so stray traffic on the
 /// port is ignored, and a future incompatible version can be told apart.
-const MAGIC: [u8; 4] = *b"kdj1";
+const MAGIC: [u8; 4] = *b"kdj2";
 const HELLO_EVERY: Duration = Duration::from_secs(1);
 /// Silent this long: gone.
 const PEER_TIMEOUT: Duration = Duration::from_millis(3500);
@@ -56,6 +56,22 @@ struct Hello {
     stamp: u32,
     /// The controller is plugged into it.
     controller: bool,
+    /// Its library service's port (0: it shares nothing), and a stamp that
+    /// changes whenever what it shares does.
+    library: u16,
+    library_stamp: u32,
+    /// Where its decks' tracks came from, or are coming from (see `Use`).
+    using: Vec<Use>,
+}
+
+/// A track on a deck that came, or is coming, from a source on a kdj: so
+/// that kdj knows its stick is in use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Use {
+    /// The kdj the source is on.
+    pub kdj: String,
+    /// Its number there.
+    pub source: u32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -71,14 +87,70 @@ const HELLO: u8 = b'H';
 const MIDI: u8 = b'M';
 const LED: u8 = b'L';
 
+/// A hello's longest name (host names are at most 63 bytes a label).
+const MAX_NAME: usize = 63;
+
 fn encode_hello(h: &Hello) -> Vec<u8> {
-    let mut b = Vec::with_capacity(MAGIC.len() + 10 + h.name.len());
+    let mut b = Vec::with_capacity(64 + h.name.len());
     b.extend_from_slice(&MAGIC);
     b.extend_from_slice(&[HELLO, h.first, h.count, u8::from(h.controller)]);
     b.extend_from_slice(&h.port.to_be_bytes());
     b.extend_from_slice(&h.stamp.to_be_bytes());
-    b.extend_from_slice(h.name.as_bytes());
+    b.extend_from_slice(&h.library.to_be_bytes());
+    b.extend_from_slice(&h.library_stamp.to_be_bytes());
+    put_name(&mut b, &h.name);
+    let using = &h.using[..h.using.len().min(MAX_DECKS)];
+    b.push(u8::try_from(using.len()).unwrap_or(0));
+    for u in using {
+        put_name(&mut b, &u.kdj);
+        b.extend_from_slice(&u.source.to_be_bytes());
+    }
     b
+}
+
+/// A length-prefixed name, cut to `MAX_NAME` bytes on a character boundary.
+fn put_name(b: &mut Vec<u8>, name: &str) {
+    let end = (0..=name.len().min(MAX_NAME)).rev().find(|&i| name.is_char_boundary(i)).unwrap_or(0);
+    b.push(u8::try_from(end).unwrap_or(0));
+    b.extend_from_slice(&name.as_bytes()[..end]);
+}
+
+/// Reads a hello's fields in turn; None once it runs short.
+struct Reader<'a>(&'a [u8]);
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let (head, rest) = self.0.split_at_checked(n)?;
+        self.0 = rest;
+        Some(head)
+    }
+
+    fn u8(&mut self) -> Option<u8> {
+        self.take(1).map(|b| b[0])
+    }
+
+    fn u16(&mut self) -> Option<u16> {
+        self.take(2)?.try_into().ok().map(u16::from_be_bytes)
+    }
+
+    fn u32(&mut self) -> Option<u32> {
+        self.take(4)?.try_into().ok().map(u32::from_be_bytes)
+    }
+
+    fn name(&mut self) -> Option<String> {
+        let n = self.u8()?;
+        std::str::from_utf8(self.take(n.into())?).ok().map(str::to_owned)
+    }
+}
+
+fn decode_hello(b: &[u8]) -> Option<Hello> {
+    let mut r = Reader(b);
+    let (first, count, controller) = (r.u8()?, r.u8()?, r.u8()? != 0);
+    let (port, stamp, library, library_stamp) = (r.u16()?, r.u32()?, r.u16()?, r.u32()?);
+    let name = r.name()?;
+    let uses = r.u8()?;
+    let using = (0..uses).map(|_| Some(Use { kdj: r.name()?, source: r.u32()? })).collect::<Option<_>>()?;
+    Some(Hello { name, first, count, port, stamp, controller, library, library_stamp, using })
 }
 
 /// A MIDI or LED message; None if it's too long to be one.
@@ -95,18 +167,7 @@ fn decode(b: &[u8]) -> Option<Packet<'_>> {
     let rest = b.strip_prefix(&MAGIC)?;
     let (&kind, rest) = rest.split_first()?;
     match kind {
-        HELLO => {
-            let (head, name) = rest.split_at_checked(9)?;
-            let &[first, count, controller, p0, p1, s0, s1, s2, s3] = head else { return None };
-            Some(Packet::Hello(Hello {
-                name: std::str::from_utf8(name).ok()?.to_owned(),
-                first,
-                count,
-                port: u16::from_be_bytes([p0, p1]),
-                stamp: u32::from_be_bytes([s0, s1, s2, s3]),
-                controller: controller != 0,
-            }))
-        }
+        HELLO => decode_hello(rest).map(Packet::Hello),
         MIDI if !rest.is_empty() => Some(Packet::Midi(rest)),
         LED if !rest.is_empty() => Some(Packet::Led(rest)),
         _ => None,
@@ -175,13 +236,18 @@ impl Peer {
     }
 }
 
-/// Another kdj, for showing.
+/// Another kdj, for showing and for fetching its library.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PeerInfo {
     pub name: String,
+    /// Its decks; none for a kdj that only shares a library (`--serve`).
     pub decks: Range<usize>,
     /// The controller is plugged into it.
     pub controller: bool,
+    /// Its library service, if it shares anything, and the stamp of what.
+    pub library: Option<(SocketAddr, u32)>,
+    /// Where its decks' tracks came from.
+    pub using: Vec<Use>,
 }
 
 #[derive(Default)]
@@ -192,6 +258,9 @@ struct State {
     top_stamp: u32,
     /// Holding a letter (and saying so); not while still listening at start.
     claimed: bool,
+    /// This kdj's library service and what's in it (see `Hello`).
+    library: (u16, u32),
+    using: Vec<Use>,
 }
 
 /// Something to run on a controller message from another kdj.
@@ -215,7 +284,8 @@ pub struct Net {
 
 impl Net {
     /// Join the network as `name`, running `count` decks: from `deck` if
-    /// given, else the first free once the others have been heard.
+    /// given, else the first free once the others have been heard. With no
+    /// decks it only shares a library (`--serve`).
     ///
     /// # Errors
     /// If no UDP socket can be opened at all (the network itself coming and
@@ -225,12 +295,12 @@ impl Net {
         let receiver = data.try_clone()?;
         let net = Arc::new(Self {
             name,
-            count: count.clamp(1, MAX_DECKS),
+            count: count.min(MAX_DECKS),
             data,
             first: AtomicUsize::new(deck.unwrap_or(0)),
             controller: AtomicBool::new(false),
             epoch: AtomicU64::new(0),
-            state: Mutex::new(State { claimed: deck.is_some(), ..State::default() }),
+            state: Mutex::new(State { claimed: deck.is_some() || count == 0, ..State::default() }),
             midi_sink: Mutex::new(None),
             led_sink: Mutex::new(None),
         });
@@ -253,16 +323,56 @@ impl Net {
         self.epoch.load(Ordering::Relaxed)
     }
 
-    /// The other kdjs, by deck.
+    /// The other kdjs, by deck (those with none last).
     pub fn peers(&self) -> Vec<PeerInfo> {
         let mut peers: Vec<_> = self
             .state()
             .peers
             .iter()
-            .map(|p| PeerInfo { name: p.hello.name.clone(), decks: p.claim().decks(), controller: p.hello.controller })
+            .map(|p| {
+                let h = &p.hello;
+                PeerInfo {
+                    name: h.name.clone(),
+                    decks: p.claim().decks(),
+                    controller: h.controller,
+                    library: (h.library != 0).then(|| (SocketAddr::new(p.addr.ip(), h.library), h.library_stamp)),
+                    using: h.using.clone(),
+                }
+            })
             .collect();
-        peers.sort_by_key(|p| p.decks.start);
+        peers.sort_by_key(|p| (p.decks.is_empty(), p.decks.start));
         peers
+    }
+
+    /// This kdj's name on the network.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Whether `ip` is another kdj's (it has said hello).
+    pub fn knows(&self, ip: IpAddr) -> bool {
+        self.state().peers.iter().any(|p| p.addr.ip() == ip)
+    }
+
+    /// Say where this kdj's library service is, and the stamp of what's in it.
+    pub fn set_library(&self, port: u16, stamp: u32) {
+        let changed = std::mem::replace(&mut self.state().library, (port, stamp)) != (port, stamp);
+        if changed {
+            self.say_hello();
+        }
+    }
+
+    /// Say where this kdj's decks' tracks come from.
+    pub fn set_using(&self, using: Vec<Use>) {
+        let changed = {
+            let mut s = self.state();
+            let changed = s.using != using;
+            s.using = using;
+            changed
+        };
+        if changed {
+            self.say_hello();
+        }
     }
 
     /// Take deck `first` (and the ones after it, running several): the
@@ -333,13 +443,17 @@ impl Net {
     }
 
     fn hello(&self) -> Hello {
+        let s = self.state();
         Hello {
             name: self.name.clone(),
             first: u8::try_from(self.decks().start).unwrap_or(0),
             count: u8::try_from(self.count).unwrap_or(1),
             port: self.port(),
-            stamp: self.state().stamp,
+            stamp: s.stamp,
             controller: self.controller.load(Ordering::Relaxed),
+            library: s.library.0,
+            library_stamp: s.library.1,
+            using: s.using.clone(),
         }
     }
 
@@ -376,7 +490,7 @@ impl Net {
 
     /// Until the socket fails.
     fn hello_loop(&self, sock: &UdpSocket, started: Instant) -> std::io::Error {
-        let mut buf = [0; 512];
+        let mut buf = [0; 1500];
         let mut next_hello = Instant::now();
         loop {
             match sock.recv_from(&mut buf) {
@@ -403,23 +517,23 @@ impl Net {
     fn heard(&self, h: Hello, from: SocketAddr) {
         let addr = SocketAddr::new(from.ip(), h.port);
         let mine = h.port == self.port() && h.name == self.name;
-        if mine || h.count == 0 {
+        if mine {
             return;
         }
         let mut s = self.state();
         s.top_stamp = s.top_stamp.max(h.stamp);
         let changed = if let Some(p) = s.peers.iter_mut().find(|p| p.addr == addr) {
             let moved = (p.hello.first, p.hello.count) != (h.first, h.count);
-            let changed = moved || p.hello.controller != h.controller;
+            let changed = p.hello != h;
             p.hello = h;
             p.seen = Instant::now();
             if moved {
-                eprintln!("net: {} is deck {}", p.hello.name, letters(p.claim().decks()));
+                eprintln!("net: {} is {}", p.hello.name, role(p.claim().decks()));
             }
             changed
         } else {
             let p = Peer { hello: h, addr, seen: Instant::now() };
-            eprintln!("net: found {} (deck {})", p.hello.name, letters(p.claim().decks()));
+            eprintln!("net: found {} ({})", p.hello.name, role(p.claim().decks()));
             s.peers.push(p);
             true
         };
@@ -509,6 +623,11 @@ fn group_socket() -> std::io::Result<UdpSocket> {
     Ok(s.into())
 }
 
+/// What a kdj is: "deck A", or "library" for one that only shares (`--serve`).
+pub fn role(decks: Range<usize>) -> String {
+    if decks.is_empty() { "library".into() } else { format!("deck {}", letters(decks)) }
+}
+
 /// "A", or "A–B" for a kdj running two decks.
 pub fn letters(decks: Range<usize>) -> String {
     let letter = |d: usize| char::from(b'A' + u8::try_from(d).unwrap_or(25).min(25));
@@ -528,16 +647,31 @@ mod tests {
 
     #[test]
     fn packets_round_trip() {
-        let h = Hello { name: "kdj-oak-pike".into(), first: 1, count: 1, port: 50_123, stamp: 7, controller: true };
-        assert_eq!(decode(&encode_hello(&h)), Some(Packet::Hello(h)));
+        let h = Hello {
+            name: "kdj-oak-pike".into(),
+            first: 1,
+            count: 1,
+            port: 50_123,
+            stamp: 7,
+            controller: true,
+            library: 50_124,
+            library_stamp: 99,
+            using: vec![Use { kdj: "kdj-elm-fox".into(), source: 2 }],
+        };
+        assert_eq!(decode(&encode_hello(&h)), Some(Packet::Hello(h.clone())));
+        let serve = Hello { count: 0, using: Vec::new(), ..h.clone() };
+        assert_eq!(decode(&encode_hello(&serve)), Some(Packet::Hello(serve)));
+        let long = Hello { name: "é".repeat(40), ..h };
+        let Some(Packet::Hello(cut)) = decode(&encode_hello(&long)) else { panic!("a long name still decodes") };
+        assert_eq!(cut.name, "é".repeat(31), "cut to 63 bytes, on a character boundary");
         let (b, len) = encode(MIDI, &[0x9e, 24, 127]).expect("fits");
         assert_eq!(decode(&b[..len]), Some(Packet::Midi(&[0x9e, 24, 127])));
         let (b, len) = encode(LED, &[0x9e, 24, 0]).expect("fits");
         assert_eq!(decode(&b[..len]), Some(Packet::Led(&[0x9e, 24, 0])));
         assert_eq!(encode(MIDI, &[0; 4]), None, "not a MIDI message");
-        assert_eq!(decode(b"kdj1"), None);
-        assert_eq!(decode(b"xyz1M\x90\x24\x7f"), None, "not ours");
-        assert_eq!(decode(b"kdj1H\x00\x01"), None, "cut short");
+        assert_eq!(decode(b"kdj2"), None);
+        assert_eq!(decode(b"kdj1M\x90\x24\x7f"), None, "an older kdj's");
+        assert_eq!(decode(b"kdj2H\x00\x01"), None, "cut short");
     }
 
     #[test]

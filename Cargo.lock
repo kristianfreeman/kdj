@@ -1121,6 +1121,7 @@ dependencies = [
  "rusty_link",
  "sdl2",
  "serde",
+ "serde_json",
  "socket2",
  "toml",
 ]
@@ -1166,6 +1167,8 @@ dependencies = [
  "binrw",
  "kdj-engine",
  "rekordcrate",
+ "serde",
+ "serde_json",
  "unicode-normalization",
 ]
 

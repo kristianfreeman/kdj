@@ -25,7 +25,7 @@ fn usb_export_tracks_resolve_against_the_stick_root() {
     assert_eq!(expected.len(), 2);
 
     let pdb = Some(stick.join("PIONEER/rekordbox/export.pdb"));
-    let source = library::Source { name: "DEMO".into(), usbanlz, root: Some(stick.clone()), pdb };
+    let source = library::Source { name: "DEMO".into(), usbanlz, root: Some(stick.clone()), pdb, remote: None };
     let lib = library::scan(&source);
     assert_eq!(lib.missing, 0);
     assert_eq!(lib.entries.len(), 2);
