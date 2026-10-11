@@ -245,6 +245,11 @@ impl Browser {
         f.touch.add([px - 8.0, fy + 4.0, 36.0, 38.0], Target::Action(Action::PlayPause));
         // The hint corner closes the browser.
         f.touch.add([WIDTH - 220.0, fy + 4.0, 220.0, 40.0], Target::Action(Action::Browse));
+        // Settings, a tap away: the title opens the browser, this the rest.
+        let settings = [WIDTH / 2.0 - 70.0, fy + 8.0, 120.0, 28.0];
+        f.outline(settings, 1.5, FG);
+        atlas.draw(f, Style::Label, settings[0] + settings[2] / 2.0, fy + 27.0, Align::Center, "Settings  ›", FG);
+        f.touch.add([settings[0], fy + 2.0, settings[2], 42.0], Target::Action(Action::Settings));
         f.tri([px, py], [px, py + 22.0], [px + 19.0, py + 11.0], FG);
         if !s.playing {
             f.tri([px + 2.5, py + 5.0], [px + 2.5, py + 17.0], [px + 13.0, py + 11.0], BG);
@@ -384,6 +389,16 @@ pub fn level_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The touchscreen's way to the settings: open the browser (tap the
+    /// title), then this.
+    #[test]
+    fn settings_are_a_tap_away_in_the_browser() {
+        let mut b = Browser::new(true);
+        let mut f = Frame::default();
+        b.draw(&mut f, &Atlas::new(1.0), &Snapshot::default(), "");
+        assert!(f.touch.iter().any(|t| t == Target::Action(Action::Settings)), "a Settings button");
+    }
 
     #[test]
     fn long_paths_drop_whole_levels_from_the_left() {
