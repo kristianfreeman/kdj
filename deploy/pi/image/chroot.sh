@@ -52,7 +52,11 @@ if [ -d "$stage/dev" ]; then
     systemctl enable ssh.service
     echo "$u" >/etc/kdj/dev-user
     id "$u"
-    sshd -T -C "user=$u,host=probe,addr=127.0.0.1" | grep -iE '^(pubkeyauthentication|usepam|passwordauthentication) '
+    # What SSH will do for it (a throwaway host key: the Pi makes its own).
+    ssh-keygen -q -t ed25519 -N '' -f /tmp/kdj-hostkey
+    sshd -T -h /tmp/kdj-hostkey -C "user=$u,host=probe,addr=127.0.0.1" |
+        grep -iE '^(pubkeyauthentication|usepam|passwordauthentication) '
+    rm -f /tmp/kdj-hostkey /tmp/kdj-hostkey.pub
 fi
 
 say "Hostname"
