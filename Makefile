@@ -1,5 +1,5 @@
 # One place for the checks. `make check` before pushing; `make full` rarely.
-.PHONY: check lint fmt test test-full perf scenarios full linux image card flash screens hooks deploy release-image
+.PHONY: check lint fmt test test-full perf scenarios full linux image card flash screens hooks deploy release-image dev story-live
 
 check: lint test scenarios
 
@@ -31,6 +31,15 @@ perf:
 # GitHub shows as a gallery. The pre-commit hook does it when the UI changes.
 screens:
 	cargo run -q --release -p kdj-sim -- story docs/screens --scale 1
+
+# The deck in a window here, rebuilt and restarted on every change
+# (ARGS="--decks 2" etc.), and every screen redrawn on every change on a
+# page that reloads itself (http://localhost:8710).
+dev:
+	tools/dev.sh $(ARGS)
+
+story-live:
+	tools/story-live.sh
 
 # Use the repository's git hooks (.githooks): screens redrawn on commit.
 hooks:

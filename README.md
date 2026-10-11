@@ -162,6 +162,18 @@ sticks for the browser, and sets up the DAC hat. On Linux the audio thread
 runs at realtime priority (`SCHED_FIFO`) and memory is locked when the
 service's limits allow; the log says whether it did.
 
+## Develop on this computer
+
+```bash
+make dev          # the deck in a window here, rebuilt and restarted ~2 s after any change
+make story-live   # every screen, redrawn on every change: http://localhost:8710
+```
+
+`make dev` is the deck as on the Pi (800×480, the Xone:K3 map, your
+Rekordbox collection and USB sticks); `make dev ARGS="--decks 2"` for two
+decks, `ARGS=--synth` for a test track. `make deploy` then puts it on the
+Pis over the network.
+
 ## Simulate
 
 Every screen, as the Pi's 800×480 panel shows it, is in

@@ -76,7 +76,16 @@ pub fn run(opts: &Opts) -> Result<bool> {
             std::fs::remove_file(e.path())?;
         }
     }
-    std::fs::write(out.join("index.html"), html(&book.stories))?;
+    // Live (tools/story-live.sh, served over HTTP): the page reloads itself
+    // when stamp.txt changes, i.e. every time the screens are redrawn.
+    let live = std::env::var_os("KDJ_STORY_LIVE").is_some();
+    let mut page = html(&book.stories);
+    if live {
+        page = page.replace("</body>", LIVE_RELOAD);
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+        std::fs::write(out.join("stamp.txt"), stamp.to_string())?;
+    }
+    std::fs::write(out.join("index.html"), page)?;
     std::fs::write(out.join("README.md"), markdown(&book.stories))?;
     println!(
         "wrote {} stories to {} in {:.1} s",
@@ -351,6 +360,13 @@ fn slug(name: &str) -> String {
         name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
     dashed.split('-').filter(|w| !w.is_empty()).collect::<Vec<_>>().join("-")
 }
+
+/// Reload when the screens are redrawn, keeping the scroll position.
+const LIVE_RELOAD: &str = concat!(
+    "<script>let seen;setInterval(async()=>{try{const s=await (await fetch('stamp.txt',{cache:'no-store'})).text();",
+    "if(seen&&s!==seen){sessionStorage.y=scrollY;location.reload()}seen=s}catch(e){}},1000);",
+    "addEventListener('load',()=>{if(sessionStorage.y)scrollTo(0,+sessionStorage.y)})</script></body>"
+);
 
 /// The same screens as a Markdown page: a gallery on GitHub, next to them.
 fn markdown(stories: &[Story]) -> String {
