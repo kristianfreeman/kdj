@@ -295,9 +295,14 @@ fn flash(a: &FlashArgs) -> Result<()> {
     };
     ui::heading("Card");
     describe_disk(&d, Some(&img), false);
-    let setup = a.login.resolve(&d)?;
+    let mut setup = a.login.resolve(&d)?;
+    // A dev image has a login built in: first boot needn't make the same one.
+    let built_in = img.info.get("dev").map(String::as_str);
+    if built_in.is_some_and(|u| setup.login.as_ref().is_none_or(|l| l.user == u)) {
+        setup.login = None;
+    }
     ui::heading("Name and login");
-    show_setup(&setup);
+    show_setup(&setup, built_in);
     if !a.yes {
         confirm(&d, &format!("Write {} to it", img.name))?;
     }
@@ -361,7 +366,7 @@ fn add_login(id: Option<&str>, a: &LoginArgs) -> Result<()> {
     describe_disk(&d, local_image().as_ref(), false);
     let setup = a.resolve(&d)?;
     ui::heading("Name and login");
-    show_setup(&setup);
+    show_setup(&setup, None);
     if cfg!(target_os = "linux") && !is_root() {
         let mut args: Vec<OsString> = vec!["login".into(), d.id.into()];
         args.extend(LoginArgs::pass_on(&setup));
@@ -410,14 +415,20 @@ fn card_name(d: &Disk) -> Option<String> {
     name
 }
 
-fn show_setup(s: &login::Setup) {
+/// What's written to a card; `built_in`: the dev image's own login, if any.
+fn show_setup(s: &login::Setup, built_in: Option<&str>) {
     ui::field("name", &format!("{}.local", s.hostname));
     if let Some(w) = &s.wifi {
         let open = if w.password.is_empty() { ", open" } else { "" };
         ui::field("wifi", &format!("{} ({}{open})", w.ssid, w.country));
     }
+    if let Some(u) = built_in {
+        ui::ok(&format!("Login built into this dev image: ssh {u}@{}.local from first boot", s.hostname));
+    }
     let Some(l) = &s.login else {
-        ui::info("No login: the deck runs, but nobody can SSH in. (--user / --key to set one.)");
+        if built_in.is_none() {
+            ui::info("No login: the deck runs, but nobody can SSH in. (--user / --key to set one.)");
+        }
         return;
     };
     ui::field("ssh", &format!("{}@{}.local", l.user, s.hostname));

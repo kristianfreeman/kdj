@@ -31,6 +31,30 @@ apt-get clean
 say "Install the deck"
 "$stage/deploy/pi/install.sh" "$stage/kdj"
 
+if [ -d "$stage/dev" ]; then
+    say "Dev login (a dev image; make release-image leaves this out)"
+    u=$(cat "$stage/dev/user")
+    groups=
+    for g in adm audio video plugdev input netdev render sudo users; do
+        if getent group "$g" >/dev/null; then groups=$groups${groups:+,}$g; fi
+    done
+    id "$u" >/dev/null 2>&1 || useradd --create-home --shell /bin/bash --groups "$groups" "$u"
+    # No password at all, rather than a locked one ("!"), which SSH set-ups
+    # can refuse even for a key: the key is the way in.
+    usermod -p '*' "$u"
+    install -d -m 700 -o "$u" -g "$u" "/home/$u/.ssh"
+    install -m 600 -o "$u" -g "$u" "$stage/dev/authorized_keys" "/home/$u/.ssh/authorized_keys"
+    printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$u" >/etc/sudoers.d/kdj-dev
+    chmod 440 /etc/sudoers.d/kdj-dev
+    visudo -cqf /etc/sudoers.d/kdj-dev
+    # SSH on from the first boot, not only once the boot partition's ssh file
+    # is seen.
+    systemctl enable ssh.service
+    echo "$u" >/etc/kdj/dev-user
+    id "$u"
+    sshd -T -C "user=$u,host=probe,addr=127.0.0.1" | grep -iE '^(pubkeyauthentication|usepam|passwordauthentication) '
+fi
+
 say "Hostname"
 echo kdj >/etc/hostname
 sed -i 's/^127\.0\.1\.1\s.*/127.0.1.1\t\tkdj/' /etc/hosts

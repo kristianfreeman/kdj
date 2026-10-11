@@ -89,6 +89,8 @@ info() {
     echo "kdj=${KDJ_VERSION:-unknown}"
     echo "commit=${KDJ_COMMIT:-unknown}"
     echo "base=${KDJ_BASE:-unknown}"
+    # A dev image: who can SSH in from the first boot (kdj-flash shows it).
+    [ -z "${KDJ_DEV_USER:-}" ] || echo "dev=$KDJ_DEV_USER"
 }
 
 build() {
@@ -130,6 +132,8 @@ build() {
     cp -a /src/deploy/pi "$stage/deploy/pi"
     cp -a /src/config "$stage/config"
     install -m 755 /out/build/kdj "$stage/kdj"
+    # A dev image's login (build.sh): its user and public key.
+    [ ! -d /out/build/dev ] || cp -a /out/build/dev "$stage/dev"
 
     say "Installing in the chroot"
     chroot "$root" /tmp/kdj-install/deploy/pi/image/chroot.sh
@@ -229,6 +233,16 @@ echo "probe: kdj $(systemctl show kdj.service -p ActiveState -p SubState -p NRes
 echo "probe: (a container has no screen or sound card, so kdj can't start here: what's checked is that it keeps retrying)"
 journalctl -b -u kdj.service -o cat --no-pager | grep -v '^ALSA lib' | tail -n 2 | sed 's/^/probe:   /'
 echo "probe: sudo $(sudo -n -l -U kdj 2>/dev/null | tail -n 1)"
+# A dev image's login, for real: over SSH with a throwaway key (added to
+# this boot's overlay only, never the image), and sudo.
+dev=$(cat /etc/kdj/dev-user 2>/dev/null)
+if [ -n "$dev" ]; then
+    ssh-keygen -q -t ed25519 -N '' -f /tmp/probe-key
+    cat /tmp/probe-key.pub >>"/home/$dev/.ssh/authorized_keys"
+    for i in $(seq 1 30); do systemctl is-active -q ssh.service && break; sleep 1; done
+    echo "probe: ssh $(ssh -i /tmp/probe-key -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null "$dev@127.0.0.1" 'echo in as $(whoami); sudo -n true && echo with sudo' 2>&1 | tr '\n' ' ')"
+fi
 echo "probe: done"
 systemctl poweroff
 PROBE
@@ -260,6 +274,10 @@ PROBE
     grep -Eq '^probe: kdj .*NRestarts=([3-9]|[1-9][0-9])' "$log" || bad=1
     grep -q '^probe: kdj .*ActiveState=failed' "$log" && bad=1
     grep -q 'NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot' "$log" || bad=1
+    # A dev image: logged in over SSH on first boot, with sudo.
+    if [ -n "${KDJ_DEV_USER:-}" ]; then
+        grep -q "^probe: ssh in as $KDJ_DEV_USER with sudo" "$log" || { bad=1; echo "the dev login doesn't work over SSH" >&2; }
+    fi
     [ "$bad" -eq 0 ] || { echo "boot test failed" >&2; exit 1; }
     echo "boot test: ok" >&2
 }

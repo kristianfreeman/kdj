@@ -23,6 +23,12 @@ out=$repo/target/image
 cache=$out/cache
 name=kdjos-rpi4-$(date +%Y-%m-%d)
 containers=(kdj-image-prepare kdj-image-binary kdj-image-build)
+# A dev image (the default) has SSH on and the person building it able to
+# log in from the first boot, whatever first boot's own set-up does: their
+# user name here and public key (~/.ssh/id_ed25519.pub or similar), with
+# sudo. KDJ_DEV=0 (`make release-image`) leaves that out.
+dev=${KDJ_DEV:-1}
+dev_user=${KDJ_DEV_USER:-$(id -un | tr '[:upper:]' '[:lower:]')}
 # How hard to compress: 0 by default (6 s, ~740 MB; flashing is limited by
 # the card anyway), 6 for an image to hand out (`make release-image`: a
 # minute, ~600 MB).
@@ -72,6 +78,21 @@ run() {
 start=$(date +%s)
 mkdir -p "$cache" "$out/build" "$out/work"
 
+rm -rf "$out/build/dev"
+if [ "$dev" = 1 ]; then
+    key=
+    for k in id_ed25519.pub id_ecdsa.pub id_ed25519_sk.pub id_rsa.pub; do
+        if [ -f "$HOME/.ssh/$k" ]; then key=$HOME/.ssh/$k; break; fi
+    done
+    case $dev_user in
+    root | kdj | '' | *[!a-z0-9_-]*) echo "can't make a dev login for $dev_user: set KDJ_DEV_USER" >&2; exit 1 ;;
+    esac
+    [ -n "$key" ] || { echo "no SSH public key in ~/.ssh for the dev login: ssh-keygen -t ed25519" >&2; exit 1; }
+    mkdir -p "$out/build/dev"
+    echo "$dev_user" >"$out/build/dev/user"
+    grep -vE '^\s*(#|$)' "$key" >"$out/build/dev/authorized_keys"
+fi
+
 say "Raspberry Pi OS Lite (64-bit)"
 url=${RASPIOS_URL:-$(curl -fsSIL -o /dev/null -w '%{url_effective}' https://downloads.raspberrypi.com/raspios_lite_arm64_latest)}
 case $url in
@@ -119,11 +140,15 @@ version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/crates/kdj/Cargo.toml" | he
 commit=$(git -C "$repo" describe --always --dirty 2>/dev/null || echo unknown)
 run kdj-image-build --privileged --cgroupns=host \
     -e "KDJ_VERSION=$version" -e "KDJ_COMMIT=$commit" -e "KDJ_BASE=${xz%.img.xz}" -e "KDJ_XZ=$xz_level" \
+    -e "KDJ_DEV_USER=$( [ "$dev" = 1 ] && echo "$dev_user")" \
     -v "$repo:/src:ro" -v "$out:/out" \
     "$(tools_image "$codename")" /src/deploy/pi/image/customize.sh build "$name"
 
 rm -rf "$out/work"
 say "Done in $(( ($(date +%s) - start) / 60 )) min $(( ($(date +%s) - start) % 60 )) s"
+if [ "$dev" = 1 ]; then
+    echo "A dev image: SSH is on, ssh $dev_user@<its name>.local from first boot. make release-image leaves that out."
+fi
 ls -lh "$out/$name.img.xz"
 cat "$out/$name.img.xz.sha256"
 echo "Based on $xz. Flash with Raspberry Pi Imager: Use custom → $out/$name.img.xz"

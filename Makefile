@@ -54,12 +54,13 @@ deploy:
 
 # Raspberry Pi 4 SD card image with the deck preinstalled, in Docker
 # (target/image/kdjos-rpi4-<date>.img.xz; see deploy/pi/README.md). Lightly
-# compressed, for flashing here; release-image takes a minute more to make
-# it ~20% smaller, to hand out.
+# compressed, for flashing here, and a dev image: SSH on and you able to log
+# in from first boot (your user and ~/.ssh key, with sudo). release-image
+# leaves the login out and takes a minute more to make it ~20% smaller.
 image:
 	deploy/pi/image/build.sh
 
 release-image:
-	KDJ_XZ=6 deploy/pi/image/build.sh
+	KDJ_XZ=6 KDJ_DEV=0 deploy/pi/image/build.sh
 
 full: check test-full perf
