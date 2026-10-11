@@ -10,7 +10,7 @@ description = "Put the deck's image on an SD card: list cards, show what's on th
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 console = "0.16.6"
-dialoguer = { version = "0.12.0", default-features = false }
+dialoguer = { version = "0.12.0", default-features = false, features = ["password"] }
 indicatif = "0.18.6"
 libc = "0.2.190"
 liblzma = "0.4.8"

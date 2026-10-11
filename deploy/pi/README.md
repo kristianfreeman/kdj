@@ -93,10 +93,19 @@ to apply; `--user`, `--key`, `--hostname` change it, `--no-login` skips
 it, and `kdj-flash login` adds or replaces it on a card that's already
 flashed (applied at its next boot, booted before or not).
 
+`--wifi NETWORK` (on `flash` or `login`) has the Pi join a Wi-Fi network
+too, alongside Ethernet. The password comes from your Mac's keychain
+(macOS asks to allow it) or is typed in unseen, and passes to the sudo'd
+writer on its standard input, never its command line. The country
+(`--wifi-country US`) defaults to this computer's region; Raspberry Pi OS
+keeps Wi-Fi off until it's set. As with Raspberry Pi Imager, the password
+sits in the card's boot partition (`network-config`). On the Pi, Settings
+→ Network shows Wi-Fi and Ethernet and switches Wi-Fi off and on.
+
 Already set up in the image: the deck at `/opt/kdj/bin/kdj`, starting at
 boot, `/etc/kdj/kdj.env` with `--device hifiberry --buffer 128`, the
-example MIDI mapping in `/etc/kdj/`, USB stick mounting, power off and
-restart for the kdj user, the `config.txt` block and quiet `cmdline.txt`.
+example MIDI mapping in `/etc/kdj/`, USB stick mounting, power off,
+restart and the Wi-Fi switch for the kdj user, the `config.txt` block and quiet `cmdline.txt`.
 Each Pi gets its own network name, `kdj-<word>-<word>.local`, so several
 can share a network: kdj-flash writes one to the card, and a Pi nobody
 named makes one from its serial number on first boot (`kdj-name`, words

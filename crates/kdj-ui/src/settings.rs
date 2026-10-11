@@ -56,6 +56,10 @@ pub enum Key {
     Deck,
     /// The other kdjs on the network.
     Decks,
+    /// Wi-Fi on or off, its network, and Ethernet's address.
+    Wifi,
+    WifiNetwork,
+    Ethernet,
     Controller,
     LedColour,
     Mapping,
@@ -476,6 +480,11 @@ pub struct SystemInfo {
     pub deck: usize,
     /// The other kdjs on the network.
     pub decks: String,
+    /// Wi-Fi's radio is on (None: unknown yet, or no `NetworkManager`).
+    pub wifi_on: Option<bool>,
+    /// Its network, signal and address, or why there's none.
+    pub wifi: String,
+    pub ethernet: String,
     pub audio_errors: u64,
 }
 
@@ -488,6 +497,7 @@ pub fn pages(prefs: &Prefs, info: &SystemInfo) -> Vec<Page> {
         Page { name: "Playback", rows: playback(prefs) },
         Page { name: "Audio", rows: audio(prefs, info) },
         Page { name: "Sync", rows: sync(prefs, info) },
+        Page { name: "Network", rows: network(info) },
         Page { name: "Controller", rows: controller(prefs, info) },
         Page { name: "Display", rows: display(prefs) },
         Page { name: "System", rows: system(info) },
@@ -587,6 +597,30 @@ fn sync(p: &Prefs, info: &SystemInfo) -> Vec<Row> {
     ]
 }
 
+fn network(info: &SystemInfo) -> Vec<Row> {
+    vec![
+        row(
+            Key::Wifi,
+            "Wi-Fi",
+            "Off for a set on Ethernet only; on to link and debug without a cable.",
+            on_off(info.wifi_on.unwrap_or(true)),
+        ),
+        row(
+            Key::WifiNetwork,
+            "Wi-Fi network",
+            "Set when the card is flashed: kdj-flash --wifi.",
+            Value::Info(info.wifi.clone()),
+        ),
+        row(Key::Ethernet, "Ethernet", "Its address on the network.", Value::Info(info.ethernet.clone())),
+        row(
+            Key::Name,
+            "Name",
+            "Its name on the network: ssh in with it, and tell several kdjs apart.",
+            Value::Info(format!("{}.local", info.hostname)),
+        ),
+    ]
+}
+
 fn controller(p: &Prefs, info: &SystemInfo) -> Vec<Row> {
     vec![
         row(
@@ -683,7 +717,7 @@ mod tests {
         s.draw(&mut f, &atlas, "");
         let segments = f.touch.iter().filter(|t| matches!(t, Target::Choice(..))).count();
         assert_eq!(segments, 2 + 2 + 2 + 2 + 2 + 3, "every option on the Playback page");
-        assert_eq!(f.touch.iter().filter(|t| matches!(t, Target::Page(_))).count(), 6);
+        assert_eq!(f.touch.iter().filter(|t| matches!(t, Target::Page(_))).count(), 7);
         assert_eq!(s.choose(2, 0), Some(Key::Quantize));
         assert_eq!(s.choice(Key::Quantize), Some(0));
     }
@@ -691,7 +725,7 @@ mod tests {
     #[test]
     fn the_mapping_opens_from_the_controller_page_and_backs_out() {
         let mut s = Settings::new(pages(&Prefs::default(), &SystemInfo::default()));
-        s.move_by(3); // Controller
+        s.move_by(4); // Controller
         s.sideways(1);
         s.move_by(2);
         assert_eq!(s.current().map(|r| r.key), Some(Key::Mapping));

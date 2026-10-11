@@ -92,6 +92,9 @@ for u in getty@tty1.service autovt@tty1.service bluetooth.service apt-daily.time
 done
 systemctl is-enabled kdj.service | grep -qx enabled || fail "kdj.service not enabled"
 NetworkManager --print-config | grep -qx 'ipv4.link-local=4' || fail "NetworkManager doesn't read the link-local fallback"
+# What kdj-flash --wifi's first boot and the deck's Wi-Fi switch run.
+for c in /usr/bin/nmcli raspi-config rfkill; do command -v "$c" >/dev/null || fail "no $c"; done
+sudo -l -U kdj | grep -q '/usr/bin/nmcli radio wifi off' || fail "kdj can't switch Wi-Fi"
 # The service's controller mapping is there (a missing one stops kdj starting).
 map=$(sed -n '/^KDJ_ARGS=/s/.*--midi \([^ "]*\).*/\1/p' /etc/kdj/kdj.env)
 [ -z "$map" ] || [ -f "$map" ] || fail "kdj.env's --midi $map isn't installed"

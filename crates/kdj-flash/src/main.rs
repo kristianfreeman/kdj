@@ -57,6 +57,17 @@ struct LoginArgs {
     /// The key itself, passed on when re-run with sudo
     #[arg(long = "login-key", hide = true)]
     key_lines: Vec<String>,
+    /// Join this Wi-Fi network too (its password comes from your Mac's
+    /// keychain, or is asked for)
+    #[arg(long, value_name = "NETWORK")]
+    wifi: Option<String>,
+    /// The Wi-Fi country, two letters like US or GB (default: this
+    /// computer's region)
+    #[arg(long, value_name = "CC", requires = "wifi")]
+    wifi_country: Option<String>,
+    /// The Wi-Fi password comes on standard input (set when re-run with sudo)
+    #[arg(long, hide = true)]
+    wifi_password_stdin: bool,
 }
 
 impl LoginArgs {
@@ -66,7 +77,27 @@ impl LoginArgs {
         // Keep the name of a card that's one of ours; otherwise a new one.
         let keep = || card_name(disk).filter(|n| names::is_ours(n)).unwrap_or_else(names::random);
         let hostname = self.hostname.clone().unwrap_or_else(keep);
-        login::Setup::new(&hostname, self.login()?)
+        let mut setup = login::Setup::new(&hostname, self.login()?)?;
+        setup.wifi = self.wifi()?;
+        Ok(setup)
+    }
+
+    /// The Wi-Fi network to join, with its password and country, if any.
+    fn wifi(&self) -> Result<Option<login::Wifi>> {
+        let Some(ssid) = &self.wifi else { return Ok(None) };
+        let country = match &self.wifi_country {
+            Some(c) => c.clone(),
+            None => login::local_country()
+                .context("couldn't tell this computer's region: give the Wi-Fi country with --wifi-country US")?,
+        };
+        let password = if self.wifi_password_stdin {
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line).context("reading the Wi-Fi password")?;
+            line.trim_end_matches(['\r', '\n']).to_owned()
+        } else {
+            wifi_password(ssid)?
+        };
+        login::Wifi::new(ssid, &password, &country).map(Some)
     }
 
     fn login(&self) -> Result<Option<login::Login>> {
@@ -84,9 +115,14 @@ impl LoginArgs {
         login::Login::new(&user, keys).map(Some)
     }
 
-    /// Arguments that carry `setup` to the same command under sudo.
+    /// Arguments that carry `setup` to the same command under sudo (the
+    /// Wi-Fi password goes on its standard input, never on its command line).
     fn pass_on(setup: &login::Setup) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec!["--hostname".into(), setup.hostname.clone().into()];
+        if let Some(w) = &setup.wifi {
+            args.extend(["--wifi".into(), w.ssid.clone().into(), "--wifi-country".into(), w.country.clone().into()]);
+            args.push("--wifi-password-stdin".into());
+        }
         let Some(l) = &setup.login else {
             args.push("--no-login".into());
             return args;
@@ -270,7 +306,7 @@ fn flash(a: &FlashArgs) -> Result<()> {
             "--checked".into(),
         ];
         args.extend(LoginArgs::pass_on(&setup));
-        return again_with_sudo(&args, a.verify);
+        return again_with_sudo(&args, a.verify, setup.wifi.as_ref().map(|w| w.password.as_str()));
     }
     ui::heading("Writing");
     disk::unmount(&d).context("unmounting the card (close anything using it)")?;
@@ -292,7 +328,11 @@ fn flash(a: &FlashArgs) -> Result<()> {
     ui::heading("Next");
     ui::step("Put the card in the Pi (DAC hat on) and power it on.");
     ui::hint("First boot grows the card and restarts once, then the deck comes up full screen.");
-    ui::hint("No keyboard needed, ever. Plug in Ethernet for SSH and Ableton Link.");
+    if setup.wifi.is_some() {
+        ui::hint("No keyboard needed, ever. It joins the Wi-Fi on first boot; Settings → Network switches it off.");
+    } else {
+        ui::hint("No keyboard needed, ever. Plug in Ethernet (or flash with --wifi) for SSH and Ableton Link.");
+    }
     if let Some(l) = &setup.login {
         ui::step(&format!("ssh {}@{}.local", l.user, setup.hostname));
     }
@@ -320,7 +360,7 @@ fn add_login(id: Option<&str>, a: &LoginArgs) -> Result<()> {
     if cfg!(target_os = "linux") && !is_root() {
         let mut args: Vec<OsString> = vec!["login".into(), d.id.into()];
         args.extend(LoginArgs::pass_on(&setup));
-        return again_with_sudo(&args, true);
+        return again_with_sudo(&args, true, setup.wifi.as_ref().map(|w| w.password.as_str()));
     }
     write_setup(&d.id, &setup)?;
     ui::ok("Written. It applies at the card's next boot (first boot or not).");
@@ -328,6 +368,31 @@ fn add_login(id: Option<&str>, a: &LoginArgs) -> Result<()> {
         ui::step(&format!("ssh {}@{}.local", l.user, setup.hostname));
     }
     Ok(())
+}
+
+/// A Wi-Fi network's password: from the Mac's keychain if it's there (macOS
+/// asks to allow it), else typed in, unseen. Empty for an open network.
+fn wifi_password(ssid: &str) -> Result<String> {
+    if cfg!(target_os = "macos") {
+        ui::info(&format!("Looking for {ssid}'s password in your keychain: macOS may ask you to allow it."));
+        let found = std::process::Command::new("security")
+            .args(["find-generic-password", "-D", "AirPort network password", "-a", ssid, "-w"])
+            .stderr(std::process::Stdio::null())
+            .output();
+        if let Ok(out) = found
+            && out.status.success()
+            && let Ok(pw) = String::from_utf8(out.stdout)
+        {
+            ui::ok("Found it");
+            return Ok(pw.trim_end_matches('\n').to_owned());
+        }
+        ui::info("Not in the keychain (or not allowed).");
+    }
+    dialoguer::Password::new()
+        .with_prompt(format!("Password for {ssid} (empty for an open network)"))
+        .allow_empty_password(true)
+        .interact()
+        .context("reading the Wi-Fi password")
 }
 
 /// The name a card's user-data gives its Pi, if any.
@@ -342,6 +407,10 @@ fn card_name(d: &Disk) -> Option<String> {
 
 fn show_setup(s: &login::Setup) {
     ui::field("name", &format!("{}.local", s.hostname));
+    if let Some(w) = &s.wifi {
+        let open = if w.password.is_empty() { ", open" } else { "" };
+        ui::field("wifi", &format!("{} ({}{open})", w.ssid, w.country));
+    }
     let Some(l) = &s.login else {
         ui::info("No login: the deck runs, but nobody can SSH in. (--user / --key to set one.)");
         return;
@@ -378,7 +447,7 @@ fn format(id: Option<&str>, name: &str, yes: bool) -> Result<()> {
     }
     if cfg!(target_os = "linux") && !is_root() {
         let args: Vec<OsString> = vec!["format".into(), d.id.into(), "--name".into(), name.into(), "--yes".into()];
-        return again_with_sudo(&args, true);
+        return again_with_sudo(&args, true, None);
     }
     disk::unmount(&d).context("unmounting the card")?;
     disk::format(&d, &name.to_ascii_uppercase())?;
@@ -456,7 +525,8 @@ fn is_root() -> bool {
 
 /// Run this same tool again under sudo for the part that needs it, after the
 /// questions have been asked.
-fn again_with_sudo(args: &[OsString], verify: bool) -> Result<()> {
+/// `secret` goes to it on standard input (sudo itself asks on the terminal).
+fn again_with_sudo(args: &[OsString], verify: bool, secret: Option<&str>) -> Result<()> {
     ui::info("Writing to a disk needs admin rights: sudo will ask for your password.");
     let exe = std::env::current_exe()?;
     let mut cmd = std::process::Command::new("sudo");
@@ -464,7 +534,15 @@ fn again_with_sudo(args: &[OsString], verify: bool) -> Result<()> {
     if !verify {
         cmd.arg("--no-verify");
     }
-    let status = cmd.status().context("running sudo")?;
+    if secret.is_some() {
+        cmd.stdin(std::process::Stdio::piped());
+    }
+    let mut child = cmd.spawn().context("running sudo")?;
+    if let (Some(secret), Some(mut stdin)) = (secret, child.stdin.take()) {
+        use std::io::Write as _;
+        writeln!(stdin, "{secret}").context("passing on the Wi-Fi password")?;
+    }
+    let status = child.wait().context("running sudo")?;
     if !status.success() {
         bail!("stopped ({status})");
     }
@@ -537,6 +615,9 @@ fn describe_disk(d: &Disk, local: Option<&Image>, detail: bool) {
 fn login_line(l: &inspect::Login) {
     if let Some(name) = &l.name {
         ui::field("name", &format!("{name}.local"));
+    }
+    if let Some(w) = &l.wifi {
+        ui::field("wifi", w);
     }
     let ssh = if l.ssh { ", SSH switched on at next boot" } else { "" };
     match &l.found {

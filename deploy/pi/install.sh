@@ -63,9 +63,10 @@ if [ -f "$repo/config/midi-example.toml" ] && [ ! -f /etc/kdj/midi-example.toml 
     install -m 644 "$repo/config/midi-example.toml" /etc/kdj/midi-example.toml
 fi
 
-# Power off and restart from the deck's screen: exactly these two commands.
+# Power off, restart, and Wi-Fi on and off from the deck's screen: exactly
+# these commands.
 sudoers=$(mktemp)
-printf '%s\n' 'kdj ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot' >"$sudoers"
+printf '%s\n' 'kdj ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot, /usr/bin/nmcli radio wifi on, /usr/bin/nmcli radio wifi off' >"$sudoers"
 chmod 440 "$sudoers"
 visudo -cqf "$sudoers"
 install -m 440 "$sudoers" /etc/sudoers.d/kdj

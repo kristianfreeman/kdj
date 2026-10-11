@@ -32,6 +32,8 @@ pub struct Login {
     pub found: crate::login::Found,
     /// SSH is switched on at next boot (the `ssh` file is there).
     pub ssh: bool,
+    /// The Wi-Fi network it joins, if kdj-flash set one.
+    pub wifi: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,8 +60,12 @@ pub fn inspect(disk: &Disk) -> Contents {
 }
 
 fn read(dir: &Path, booted: Booted) -> Contents {
-    let login =
-        || Login { name: crate::login::hostname(dir), found: crate::login::found(dir), ssh: dir.join("ssh").exists() };
+    let login = || Login {
+        name: crate::login::hostname(dir),
+        found: crate::login::found(dir),
+        ssh: dir.join("ssh").exists(),
+        wifi: crate::login::wifi_name(dir),
+    };
     let marker = std::fs::read_to_string(dir.join("kdj-image.txt"))
         .or_else(|_| std::fs::read_to_string(dir.join("deck-image.txt")));
     if let Ok(text) = marker {

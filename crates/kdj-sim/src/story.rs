@@ -257,6 +257,9 @@ fn settings_stories(book: &mut Book) -> Result<()> {
         controller: "XONE:K3 · connected".into(),
         deck: 0,
         decks: "kdj-oak-pike B (controller)".into(),
+        wifi_on: Some(true),
+        wifi: "Home · 72% · 192.168.1.31".into(),
+        ethernet: "192.168.1.20".into(),
         audio_errors: 0,
     };
     let fresh = || Settings::new(settings::pages(&Prefs::default(), &info));
@@ -274,10 +277,11 @@ fn settings_stories(book: &mut Book) -> Result<()> {
     book.screen.save_settings_png(&file, &mut s, "")?;
     for (page, name, note) in [
         (1, "Audio", "Buffer sizes with their latency at the output's rate."),
-        (2, "Sync", "Ableton Link and how SYNC lines up."),
-        (3, "Controller", "LED colour for the K3, the mapping drawn, and MIDI learn."),
-        (4, "Display", "Zoom, phase meter, perf overlay."),
-        (5, "System", "Version and library rescan."),
+        (2, "Sync", "Ableton Link, how SYNC lines up, and this deck's letter."),
+        (3, "Network", "Wi-Fi on or off, its network and address, and Ethernet's."),
+        (4, "Controller", "LED colour for the K3, the mapping drawn, and MIDI learn."),
+        (5, "Display", "Zoom, phase meter, perf overlay."),
+        (6, "System", "Version and library rescan."),
     ] {
         let mut s = fresh();
         s.move_by(page);

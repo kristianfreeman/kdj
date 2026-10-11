@@ -30,6 +30,7 @@ mod leds;
 mod link;
 mod midi;
 mod net;
+mod network;
 mod rt;
 mod share;
 mod touch;
@@ -373,6 +374,12 @@ struct App {
     /// The network's `epoch` the screen last showed, and the deck letter the
     /// settings last showed (a change there is a tap).
     net_shown: (u64, usize),
+    /// Ethernet and Wi-Fi, for the settings.
+    network: network::Watch,
+    /// Whether Wi-Fi was on when last looked (a change in the settings is a
+    /// tap), and what switching it said.
+    wifi_shown: Option<bool>,
+    wifi_said: (mpsc::Sender<String>, mpsc::Receiver<String>),
 }
 
 impl App {
@@ -406,6 +413,35 @@ impl App {
             status,
             net,
             net_shown: (u64::MAX, args.deck.unwrap_or(0)),
+            network: network::watch(),
+            wifi_shown: None,
+            wifi_said: mpsc::channel(),
+        }
+    }
+
+    /// Keep the settings' Network page current while it can be seen, and
+    /// switch Wi-Fi when its row is changed.
+    fn follow_network(&mut self) {
+        self.network.wanted.store(self.settings.open, Ordering::Relaxed);
+        if let (Some(was), Some(picked)) = (self.wifi_shown, self.settings.choice(settings::Key::Wifi))
+            && picked != usize::from(was)
+        {
+            let on = picked == 1;
+            self.wifi_shown = Some(on);
+            self.status = format!("Switching Wi-Fi {}…", if on { "on" } else { "off" });
+            let tx = self.wifi_said.0.clone();
+            std::thread::spawn(move || drop(tx.send(network::set_wifi(on))));
+        }
+        if let Some(said) = self.wifi_said.1.try_iter().last() {
+            self.status = said;
+        }
+        if let Some(s) = self.network.status.try_iter().last() {
+            self.settings.set_info(settings::Key::WifiNetwork, s.wifi);
+            self.settings.set_info(settings::Key::Ethernet, s.ethernet);
+            if let Some(on) = s.wifi_on {
+                self.settings.set_choice(settings::Key::Wifi, usize::from(on));
+            }
+            self.wifi_shown = s.wifi_on;
         }
     }
 
@@ -804,6 +840,7 @@ fn run() -> Result<()> {
             app.act(a, e, deck);
         }
         app.follow_net();
+        app.follow_network();
         if let Ok(scan) = scan_rx.try_recv() {
             app.take_libraries(scan);
         }
@@ -958,6 +995,9 @@ fn system_info(args: &Args, output: &str, sample_rate: u32) -> settings::SystemI
         controller,
         deck: args.deck.unwrap_or(0),
         decks: "None found".into(),
+        wifi_on: None,
+        wifi: "Looking…".into(),
+        ethernet: "Looking…".into(),
         audio_errors: 0,
     }
 }
