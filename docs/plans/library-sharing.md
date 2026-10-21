@@ -127,12 +127,11 @@ Rules:
 Phase 1 and 2 are independent of the audio path and safe to build first;
 phase 3 is where the Pi's 1 GB matters.
 
-## Open questions
+## Decided
 
-- Should every kdj share its sticks by default (recommended), or only when
-  turned on in the settings?
-- Will a laptop with Rekordbox be a host (`kdj --serve` on the Mac, sharing
-  the local collection)? If so, the local collection's playlists matter, and
-  its database is encrypted (we only see tracks, not playlists, today).
-- Two Pis on a direct cable, or through a switch/router? That decides
-  whether link-local setup is phase 1 or phase 4.
+- Every kdj shares its sticks by default (as built).
+- A laptop can be the host: `kdj --serve` shares the Mac's collection. Its
+  database is encrypted, so it shares tracks but not playlists yet; reading
+  the collection's playlists is still to do.
+- Cable or switch: either. Link-local addresses for a direct cable are in
+  the image (`deploy/pi/nm-kdj.conf`), untested on two Pis.

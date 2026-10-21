@@ -208,7 +208,13 @@ impl Setup {
         }
         // macOS leaves ._ files for extended attributes on FAT: tidy them.
         if cfg!(target_os = "macos") {
-            let _ = std::process::Command::new("dot_clean").arg("-m").arg(boot).status();
+            // Quietly: it complains about folders macOS protects (.Spotlight-V100).
+            let _ = std::process::Command::new("dot_clean")
+                .arg("-m")
+                .arg(boot)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
         }
         Ok(())
     }
