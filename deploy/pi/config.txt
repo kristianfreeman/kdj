@@ -9,7 +9,8 @@ dtparam=audio=off
 # The PCM5122 DAC hat, clocked by the Pi (-std): right on any PCM5122 board.
 # Plain hifiberry-dacplus trusts the board's own clock chips, and on a board
 # whose chips aren't a DAC+ Pro's everything plays at the wrong speed (ours:
-# twice as fast). The deck checks its audio clock at start and says so.
+# twice as fast). kdj-dac times the hat at boot and switches between the two
+# by itself if this one doesn't keep time.
 dtoverlay=hifiberry-dacplus-std
 
 # The display. HDMI screens need nothing here (set the mode in cmdline.txt,

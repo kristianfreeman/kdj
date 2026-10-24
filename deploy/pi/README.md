@@ -150,8 +150,10 @@ boot partition) or over SSH:
    the `kdj` markers:
    - **DAC hat**: `hifiberry-dacplus-std` (the Pi clocks the DAC) suits any
      PCM5122 board. Plain `hifiberry-dacplus` relies on a DAC+ Pro's own
-     clock chips and plays at double speed on boards without them; the deck
-     warns at start if its audio clock is off.
+     clock chips and plays at double speed on boards without them. Nothing to
+     do either way: `kdj-dac` times the hat at boot, before the deck starts,
+     switches to the other setting (one restart) if this one doesn't keep
+     time, and remembers what works (`/var/lib/kdj/dac`).
    - **Display**: nothing for HDMI; for a DSI panel, uncomment its overlay.
 4. `sudo reboot`. The deck comes up full screen.
 

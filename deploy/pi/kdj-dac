@@ -1,0 +1,50 @@
+#!/bin/sh
+# kdj-dac: the DAC hat keeps time, without anyone having to know why.
+#
+# PCM5122 hats come clocked two ways: by the Pi (hifiberry-dacplus-std, the
+# default) or by the board's own clock chips (hifiberry-dacplus, a DAC+
+# Pro's). The wrong one plays everything at the wrong speed while saying
+# all is well. So before the deck starts, time a second of audio on the hat:
+# if it takes a second, remember that and skip this from then on; if not,
+# switch to the other setting and restart once. Neither keeping time: leave
+# it, rather than restart for ever. Nothing for anyone to read but the log.
+set -u
+config=/boot/firmware/config.txt
+state=/var/lib/kdj/dac
+card=sndrpihifiberry
+
+current=$(sed -n 's/^dtoverlay=\(hifiberry-dacplus\(-std\)\{0,1\}\)$/\1/p' "$config" | head -n1)
+[ -n "$current" ] || exit 0
+case $current in
+hifiberry-dacplus-std) other=hifiberry-dacplus ;;
+*) other=hifiberry-dacplus-std ;;
+esac
+mkdir -p "$(dirname "$state")"
+
+if grep -qx "$current ok" "$state" 2>/dev/null; then
+    exit 0
+fi
+if ! aplay -l 2>/dev/null | grep -q "$card"; then
+    echo "kdj-dac: no DAC hat found with $current"
+    exit 0
+fi
+
+start=$(date +%s%N)
+aplay -q -D "hw:CARD=$card,DEV=0" -f S16_LE -r 48000 -c 2 -d 1 /dev/zero 2>/dev/null || exit 0
+ms=$(( ($(date +%s%N) - start) / 1000000 ))
+
+# A second of audio, with aplay's own start-up: about 1000 ms. A clock off
+# by a factor shows as 500 or 2000.
+if [ "$ms" -ge 850 ] && [ "$ms" -le 1300 ]; then
+    echo "kdj-dac: the DAC keeps time with $current (1 s in $ms ms)"
+    echo "$current ok" >"$state"
+    exit 0
+fi
+echo "$current bad" >>"$state"
+if grep -qx "$other bad" "$state"; then
+    echo "kdj-dac: neither clock setting keeps time (1 s in $ms ms with $current); leaving it"
+    exit 0
+fi
+echo "kdj-dac: 1 s took $ms ms with $current: switching to $other and restarting"
+sed -i "s/^dtoverlay=$current\$/dtoverlay=$other/" "$config"
+systemctl reboot

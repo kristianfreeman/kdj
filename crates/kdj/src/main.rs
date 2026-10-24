@@ -336,7 +336,7 @@ impl Remotes {
 }
 
 /// What the deck says while it has no sound card to play on.
-const NO_SOUND_CARD: &str = "No sound card: is the DAC hat on? Playing silently";
+const NO_SOUND_CARD: &str = "No sound card";
 
 /// How long a power off / restart press waits for its confirming second press.
 const POWER_CONFIRM: Duration = Duration::from_secs(3);
@@ -867,7 +867,7 @@ fn run() -> Result<()> {
         frames.loaded |= app.settle_loads();
         audio_watch.take_stats(&mut app, &mut audio, sample_rate);
         audio_watch.check(&mut app, &audio);
-        if silent && audio_watch.sound_card_arrived(&args, &mut app) {
+        if silent && audio_watch.sound_card_arrived(&args) {
             return Ok(());
         }
         frames.render(&mut app, &screen.window, &audio.errors);
@@ -979,20 +979,20 @@ impl AudioWatch {
     fn take_stats(&mut self, app: &mut App, audio: &mut audio::Audio, sample_rate: u32) {
         while let Ok(s) = audio.stats.pop() {
             app.hud.callback(s, sample_rate);
+            // For the log only: on the Pi, kdj-dac puts the clock right at
+            // boot, so this is for a set-up it couldn't (or a new board).
             if let Some(ratio) = self.clock.add(s.frames, Instant::now(), sample_rate) {
-                let msg = format!(
-                    "The sound card runs {ratio:.2}× too fast: everything plays at the wrong speed (the DAC's clock setting)"
+                eprintln!(
+                    "audio: the sound card runs {ratio:.2}× too fast (its clock setting; kdj-dac fixes a Pi's at boot)"
                 );
-                eprintln!("audio: {msg}");
-                app.status = msg;
             }
         }
     }
 
     /// Playing silent: look for a sound card now and then. True once there
     /// is one, to start again with it (on the Pi, systemd starts the deck
-    /// again straight away); until then keep saying why it's silent.
-    fn sound_card_arrived(&mut self, args: &Args, app: &mut App) -> bool {
+    /// again straight away).
+    fn sound_card_arrived(&mut self, args: &Args) -> bool {
         if self.looked.elapsed() < Duration::from_secs(3) {
             return false;
         }
@@ -1000,9 +1000,6 @@ impl AudioWatch {
         if audio::Output::open(args.buffer, args.device.as_deref()).is_ok() {
             eprintln!("audio: a sound card is here now: starting again to use it");
             return true;
-        }
-        if app.status.is_empty() {
-            NO_SOUND_CARD.clone_into(&mut app.status);
         }
         false
     }

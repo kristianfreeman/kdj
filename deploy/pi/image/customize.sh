@@ -220,7 +220,7 @@ UNIT
     cat >"$probe/kdj-probe" <<'PROBE'
 #!/bin/sh
 sleep 12
-for u in kdj.service kdj-name.service userconfig.service getty@tty1.service autovt@tty1.service bluetooth.service \
+for u in kdj.service kdj-name.service kdj-dac.service userconfig.service getty@tty1.service autovt@tty1.service bluetooth.service \
     apt-daily.timer apt-daily-upgrade.timer man-db.timer e2scrub_all.timer \
     dpkg-db-backup.timer NetworkManager-wait-online.service \
     systemd-networkd-wait-online.service NetworkManager.service; do
@@ -268,6 +268,7 @@ PROBE
     grep -q '^probe: is-enabled userconfig.service masked$' "$log" || { bad=1; echo "userconfig not masked" >&2; }
     # Named itself, as a Pi nobody named does on first boot.
     grep -q '^probe: is-enabled kdj-name.service enabled$' "$log" || bad=1
+    grep -q '^probe: is-enabled kdj-dac.service enabled$' "$log" || { bad=1; echo "kdj-dac not enabled" >&2; }
     grep -Eq '^probe: hostname kdj-[a-z]+-[a-z]+$' "$log" || { bad=1; echo "didn't name itself" >&2; }
     grep -q '^probe: getty@tty1 active$' "$log" && bad=1
     # Restarted (it has no sound card here) and still going: no start limit.

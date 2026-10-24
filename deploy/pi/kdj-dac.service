@@ -1,0 +1,12 @@
+# The DAC hat keeps time: picks its clock setting before the deck starts.
+[Unit]
+Description=kdj: the DAC hat keeps time
+After=local-fs.target sound.target
+Before=kdj.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/kdj/bin/kdj-dac
+
+[Install]
+WantedBy=multi-user.target

@@ -42,7 +42,7 @@ live=0
 
 install -d /opt/kdj/bin /opt/kdj/share /etc/kdj /media/kdj
 install -m 755 "$binary" /opt/kdj/bin/kdj
-install -m 755 "$here/kdj-usb" "$here/kdj-name" /opt/kdj/bin/
+install -m 755 "$here/kdj-usb" "$here/kdj-name" "$here/kdj-dac" /opt/kdj/bin/
 install -m 644 "$here/names.txt" /opt/kdj/share/names.txt
 if [ "$binary_only" -eq 1 ]; then
     echo "Installed /opt/kdj/bin/kdj."
@@ -72,7 +72,8 @@ visudo -cqf "$sudoers"
 install -m 440 "$sudoers" /etc/sudoers.d/kdj
 rm -f "$sudoers"
 
-install -m 644 "$here/kdj.service" "$here/kdj-usb@.service" "$here/kdj-name.service" /etc/systemd/system/
+install -m 644 "$here/kdj.service" "$here/kdj-usb@.service" "$here/kdj-name.service" "$here/kdj-dac.service" \
+    /etc/systemd/system/
 install -m 644 "$here/99-kdj-usb.rules" /etc/udev/rules.d/
 # A cable straight to another kdj: link-local addresses when there's no DHCP.
 install -d /etc/NetworkManager/conf.d
@@ -92,7 +93,7 @@ fi
 systemctl disable getty@tty1.service >/dev/null 2>&1 || true
 systemctl mask getty@tty1.service >/dev/null
 systemctl mask autovt@tty1.service >/dev/null
-systemctl enable kdj.service kdj-name.service
+systemctl enable kdj.service kdj-name.service kdj-dac.service
 
 # Nothing in the background mid-set or slowing boot: package and man-page
 # housekeeping, modems, hotkeys, Bluetooth. Wi-Fi and SSH stay as they are.
@@ -123,6 +124,7 @@ install -d /etc/systemd/system-preset
     echo "# kdj (deploy/pi/install.sh): what first boot or preset-all must keep."
     echo "enable kdj.service"
     echo "enable kdj-name.service"
+    echo "enable kdj-dac.service"
     echo "disable getty@.service"
     printf 'disable %s\n' "${quiet[@]}"
 } >/etc/systemd/system-preset/10-kdj.preset
