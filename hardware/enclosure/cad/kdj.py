@@ -12,10 +12,12 @@ writes live/*.glb (coloured, for viewer.html), live/parts.json, live/report.json
 live/collisions.glb), and out/*.stl / out/*.step for printing.
 
 Coordinates: mm, Z up, the box's front-left-bottom corner at the origin; the
-screen faces up as the lid; the back wall is at max Y.
+screen faces up, flush with the top of the walls; the back wall is at max Y.
+TILT=15|30|45 shows it standing on that kickstand leg (default 30).
 """
 
 import json
+import math
 import os
 import time
 from itertools import combinations
@@ -93,8 +95,10 @@ HAT_JACKS = [("RCA L", 18.0, 8.5, 6.5, 9.0), ("RCA R", 32.0, 8.5, 6.5, 9.0), ("3
 JACK_BODY = (10.0, 12.0, 12.0)
 CUT_JACKS = ("RCA L", "RCA R", "3.5 mm")
 JACK_HOLES = {"3.5 mm": 9.0}               # plug-sized where the plug reaches into the wall
-# The DAC goes on last, pressed straight down onto the header, so its jack
-# holes are slots open to the top of the back wall; the lid closes them.
+# The DAC goes on last: tilted to feed its barrels out through the back wall
+# from inside, then pressed down onto the header, so its jack holes are slots
+# this much taller.
+HEADER_PUSH = 7.5
 
 # --- The box ---------------------------------------------------------------
 WALL, FLOOR, GAP, LIP, CLEARANCE, PORT_GAP = 2.4, 2.0, 0.4, 2.5, 2.0, 1.0
@@ -104,7 +108,6 @@ OUT_W, OUT_D = IN_W + 2 * WALL, IN_D + 2 * WALL
 BOARD_Z = FLOOR + STANDOFF_H                 # Pi board bottom
 STACK_TOP = BOARD_Z + PI_T + HAT_GAP + HAT_T + JACK_BODY[2]
 BASE_H = STACK_TOP + CLEARANCE + NUT_H       # the screen's back (and nuts) sit on top
-LID_H = SCREEN_T + WALL
 PI_X = WALL + 0.2 + 2.2                      # its USB-A jacks (2.2 past the board) just short of the left wall
 PI_Y = OUT_D - WALL - PI_D - BACK_GAP        # its USB-C edge near the back wall
 SCREEN_X, SCREEN_Y = (OUT_W - SCREEN_W) / 2, (OUT_D - SCREEN_D) / 2
@@ -115,12 +118,60 @@ SCREEN_Z = BASE_H                            # the back of the screen's board
 SCREEN_CORNERS = [(SCREEN_X + SCREEN_W / 2 + sx * CORNER_HOLES[0] / 2, SCREEN_Y + SCREEN_D / 2 + sy * CORNER_HOLES[1] / 2) for sx in (-1, 1) for sy in (-1, 1)]
 POST_TOP = SCREEN_Z - NUT_H
 POST_R, BORE_R, SHELF = 4.5, 3.0, 3.0        # bore from below for the screwdriver; M2.5 x 6 through the shelf
+TOP_Z = SCREEN_Z + SCREEN_T                  # no lid: the walls rise to the glass, which sits flush
+
+# --- The kickstand -----------------------------------------------------------
+# Three nested U-shaped legs on one hinge under the back of the floor, one per
+# angle: fold out the one you want. Each opens until a stub behind the hinge
+# meets its own stop, a little past vertical so the box's weight holds it
+# there. Folded, they lie in the skirt under the floor. A single leg can't do
+# this: at the shallow angles it would lie nearly flat and fold under a tap.
+SKIRT = 9.0                                  # walls run this far below the floor
+LEG_T, ARM_W, ARM_GAP, LUG_W, FOOT_W = 4.0, 4.5, 0.5, 3.0, 8.0
+AXIS_Y, AXIS_Z = OUT_D - WALL - 6, -5.5      # the hinge: an M3 x 30 and nut each side
+OVER = 5.0                                   # degrees past vertical
+TAIL = (2.5, 5.0)                            # the stub behind the hinge that meets the stop
+LEGS = (45, 30, 15)                          # outermost (longest) first
+SETS_X = (3.0, 112.5)                        # left set starts, right set ends: clear of the Pi's and screen's screws
+TILT = float(os.environ.get("TILT", 30))     # shown on this leg (0: flat, all folded)
 
 
 def placed(x, y, z=0.0):
     """A point in the Pi's coordinates, in the box's: the Pi lies turned
     180 degrees, its USB-C edge to the back wall, its USB end to the left."""
     return (PI_X + PI_W - x, PI_Y + PI_D - y, z)
+
+
+def arm_x(i):
+    """x ranges of leg i's two arms (0 = the outermost leg)."""
+    off = LUG_W + ARM_GAP + i * (ARM_W + ARM_GAP)
+    left = SETS_X[0] + off
+    right = SETS_X[1] - off - ARM_W
+    return (left, left + ARM_W), (right, right + ARM_W)
+
+
+def lug_x():
+    inner = LUG_W + ARM_GAP + len(LEGS) * (ARM_W + ARM_GAP)
+    return [(SETS_X[0], SETS_X[0] + LUG_W), (SETS_X[0] + inner, SETS_X[0] + inner + LUG_W),
+            (SETS_X[1] - LUG_W, SETS_X[1]), (SETS_X[1] - inner - LUG_W, SETS_X[1] - inner)]
+
+
+def opening(angle):
+    """How far a leg swings open from folded, for a tilt of angle."""
+    return 90 - angle + OVER
+
+
+def leg_length(angle):
+    """Hinge to foot, so the foot meets the desk with the box resting on its
+    front bottom edge at angle."""
+    t = math.radians(angle)
+    hy, hz = AXIS_Y, AXIS_Z + SKIRT          # the hinge, from the front bottom edge
+    to_centre = (hy * math.sin(t) + hz * math.cos(t)) / math.sin(math.radians(opening(angle) + angle))
+    return to_centre - LEG_T / 2 * math.sin(math.radians(OVER))   # the foot's corner, tipped past vertical, is lowest
+
+
+def about_axis(deg):
+    return Pos(0, AXIS_Y, AXIS_Z) * Rot(deg, 0, 0) * Pos(0, -AXIS_Y, -AXIS_Z)
 
 
 def tag(shape, label, color):
@@ -241,13 +292,16 @@ def port_cutouts():
         if name in CUT_JACKS:
             x, _, _ = placed(jx, 0)
             r = JACK_HOLES.get(name, d + 2 * PORT_GAP) / 2
-            cuts.append(Pos(x, OUT_D - WALL - 1, hz + cz) * Rot(-90, 0, 0) * Cylinder(r, WALL + 2, align=CTR_XY))
-            cuts.append(Pos(x, OUT_D - WALL - 1, hz + cz) * Box(2 * r, WALL + 2, BASE_H, align=(Align.CENTER, Align.MIN, Align.MIN)))
+            for lift in (0, HEADER_PUSH):
+                cuts.append(Pos(x, OUT_D - WALL - 1, hz + cz + lift) * Rot(-90, 0, 0) * Cylinder(r, WALL + 2, align=CTR_XY))
+            cuts.append(Pos(x, OUT_D - WALL - 1, hz + cz) * Box(2 * r, WALL + 2, HEADER_PUSH, align=(Align.CENTER, Align.MIN, Align.MIN)))
     return cuts
 
 
 def base_model():
-    base = Box(OUT_W, OUT_D, BASE_H, align=MIN) - Pos(WALL, WALL, FLOOR) * Box(IN_W, IN_D, BASE_H, align=MIN)
+    base = Pos(0, 0, -SKIRT) * Box(OUT_W, OUT_D, TOP_Z + SKIRT, align=MIN)
+    base -= Pos(WALL, WALL, FLOOR) * Box(IN_W, IN_D, TOP_Z, align=MIN)
+    base -= Pos(WALL, WALL, -SKIRT - 1) * Box(IN_W, IN_D, SKIRT + 1, align=MIN)   # under the floor, for the legs
     for c in port_cutouts():
         base -= c
     for i in range(8):                              # floor vents under the Pi
@@ -268,18 +322,29 @@ def base_model():
         base += Pos(x, y, 0) * Cylinder(POST_R, POST_TOP, align=CTR_XY)
         base -= Pos(x, y, -1) * Cylinder(BORE_R, POST_TOP - SHELF + 1, align=CTR_XY)
         base -= Pos(x, y, -1) * Cylinder(1.4, POST_TOP + 2, align=CTR_XY)
+    for x0, x1 in lug_x():                          # the hinge's lugs
+        base += Pos(x0, AXIS_Y - 4, AXIS_Z - 3) * Box(x1 - x0, 8, -AXIS_Z + 3.5, align=MIN)
+    for i, angle in enumerate(LEGS):                # each leg's stop, against its stub when open
+        for x0, x1 in arm_x(i):
+            block = about_axis(opening(angle)) * (Pos(x0, AXIS_Y + TAIL[0], AXIS_Z + LEG_T / 2) * Box(x1 - x0, TAIL[1] - TAIL[0], 12, align=MIN))
+            base += block & (Pos(x0, AXIS_Y - 15, AXIS_Z) * Box(x1 - x0, 30, -AXIS_Z + 0.5, align=MIN))
+    base -= Pos(0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(1.6, 3 * OUT_W)
     return tag(base, "Base (printed)", "#6b7380")
 
 
-def lid_model():
-    z = BASE_H
-    lid = Pos(0, 0, z) * Box(OUT_W, OUT_D, LID_H, align=MIN)
-    lid -= Pos(SCREEN_X - GAP, SCREEN_Y - GAP, z - 1) * Box(SCREEN_W + 2 * GAP, SCREEN_D + 2 * GAP, SCREEN_T + 1, align=MIN)
-    lens_x, lens_y = SCREEN_X + (SCREEN_W - LENS_W) / 2, SCREEN_Y + (SCREEN_D - LENS_D)
-    ax = lens_x + LENS_W - VA_RIGHT - VA_W / 2
-    ay = lens_y + LENS_D - VA_TOP - VA_D / 2
-    lid -= Pos(ax, ay, z + SCREEN_T - 1) * Box(VA_W, VA_D, WALL + 2, align=CTR_XY)
-    return tag(lid, "Lid (printed)", "#b9bfc8")
+def leg_model(i, angle, open_):
+    """A U: two arms from the hinge, joined at the foot, and a stub behind the
+    hinge. Folded unless open_."""
+    length = leg_length(angle)
+    (l0, l1), (r0, r1) = arm_x(i)
+    y0, z0 = AXIS_Y - length, AXIS_Z - LEG_T / 2
+    leg = Pos(l0, y0, z0) * Box(ARM_W, length + TAIL[1], LEG_T, align=MIN)
+    leg += Pos(r0, y0, z0) * Box(ARM_W, length + TAIL[1], LEG_T, align=MIN)
+    leg += Pos(l0, y0, z0) * Box(r1 - l0, FOOT_W, LEG_T, align=MIN)
+    leg -= Pos(0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(1.6, 3 * OUT_W)
+    if open_:
+        leg = about_axis(opening(angle)) * leg
+    return tag(leg, f"Leg {angle}°", ["#3b6fb6", "#d08a2e", "#5a9a4a"][i])
 
 
 # --- Run ---------------------------------------------------------------------
@@ -312,20 +377,24 @@ def main():
     OUT.mkdir(exist_ok=True)
     groups = {
         "base": [base_model()],
-        "lid": [lid_model()],
+        "legs": [leg_model(i, a, a == TILT) for i, a in enumerate(LEGS)],
         "pi": [pi_model()],
         "dac": dac_model(),
         "screen": screen_model(),
         "ribbon": ribbon_model(),
     }
+    # Shown resting on the desk at TILT, on its front bottom edge and that leg.
+    on_desk = Rot(TILT, 0, 0) * Pos(0, 0, SKIRT)
     manifest = []
     for name, shapes in groups.items():
-        comp = Compound(children=shapes, label=name)
+        comp = on_desk * Compound(children=shapes, label=name)
         atomic(LIVE / f"{name}.glb", lambda f: export_gltf(comp, f, binary=True, linear_deflection=0.1, angular_deflection=0.4))
-        manifest.append({"name": name, "file": f"{name}.glb", "printed": name in ("base", "lid")})
-    atomic(OUT / "base.stl", lambda f: export_stl(groups["base"][0], f))
-    atomic(OUT / "lid.stl", lambda f: export_stl(Pos(0, 0, -BASE_H) * groups["lid"][0], f))
-    atomic(OUT / "enclosure.step", lambda f: export_step(Compound(children=groups["base"] + groups["lid"]), f))
+        manifest.append({"name": name, "file": f"{name}.glb", "printed": name in ("base", "legs")})
+    # For printing: the base on its rim, each leg flat (as folded).
+    atomic(OUT / "base.stl", lambda f: export_stl(Pos(0, 0, SKIRT) * groups["base"][0], f))
+    for i, angle in enumerate(LEGS):
+        atomic(OUT / f"leg-{angle}.stl", lambda f: export_stl(Pos(0, 0, LEG_T / 2 - AXIS_Z) * leg_model(i, angle, False), f))
+    atomic(OUT / "enclosure.step", lambda f: export_step(Compound(children=groups["base"] + groups["legs"]), f))
 
     # Collisions: every pair of parts from different groups (a group's own
     # pieces touch by design), by volume of overlap.
@@ -347,11 +416,13 @@ def main():
             hits.append({"a": a.label, "b": b.label, "mm3": round(vol, 2)})
             overlaps.append(tag(Compound(solids), f"{a.label} × {b.label}", "#ff2d2d"))
     if overlaps:
-        atomic(LIVE / "collisions.glb", lambda f: export_gltf(Compound(children=overlaps), f, binary=True))
+        atomic(LIVE / "collisions.glb", lambda f: export_gltf(on_desk * Compound(children=overlaps), f, binary=True))
     elif (LIVE / "collisions.glb").exists():
         os.remove(LIVE / "collisions.glb")
     report = {
-        "size_mm": [round(OUT_W, 1), round(OUT_D, 1), round(BASE_H + LID_H, 1)],
+        "size_mm": [round(OUT_W, 1), round(OUT_D, 1), round(TOP_Z + SKIRT, 1)],
+        "tilt": TILT,
+        "legs_mm": {a: round(leg_length(a), 1) for a in LEGS},
         "collisions": hits,
         "seconds": round(time.time() - t0, 1),
     }
