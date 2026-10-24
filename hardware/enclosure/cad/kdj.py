@@ -71,15 +71,15 @@ PAD_T = 0.1                                 # the STEP's copper pads, proud of t
 # Ports, Pi coordinates: name, edge ("s" = USB-C edge, "e" = USB-A end),
 # centre along that edge, width, height, and the hole in the wall (w, h),
 # sized for the plug, not the socket; None for no hole. The Pi sits against
-# the left wall (USB-A plugs are too deep to reach in), so its USB-A and
-# Ethernet jacks all poke into their holes.
+# the left wall (USB-A plugs are too deep to reach in), its jacks 0.2 mm short
+# of it so it lowers straight in, and the plugs reach in through the holes.
 PI_PORTS = [
     ("USB-C", "s", 11.2, 9.0, 3.3, (12.5, 7.0)),
     ("HDMI 0", "s", 26.0, 7.5, 3.5, None),
     ("HDMI 1", "s", 39.5, 7.5, 3.5, None),
     ("Audio", "s", 53.5, 6.0, 6.0, None),
-    ("USB 3", "e", 9.0, 13.5, 16.0, (15.5, 18.0)),
-    ("USB 2", "e", 27.0, 13.5, 16.0, (15.5, 18.0)),
+    ("USB 3", "e", 9.0, 13.5, 16.0, (16.5, 18.0)),
+    ("USB 2", "e", 27.0, 13.5, 16.0, (16.5, 18.0)),
     ("Ethernet", "e", 45.75, 16.0, 13.5, (18.0, 15.5)),
 ]
 BACK_GAP = 2.8                              # Pi's USB-C edge to the back wall: its audio jack sticks out 2.5
@@ -92,6 +92,9 @@ HAT_GAP = 11.5                              # Pi board top to HAT board bottom
 HAT_JACKS = [("RCA L", 18.0, 8.5, 6.5, 9.0), ("RCA R", 32.0, 8.5, 6.5, 9.0), ("3.5 mm", 48.0, 6.0, 4.0, 3.0)]
 JACK_BODY = (10.0, 12.0, 12.0)
 CUT_JACKS = ("RCA L", "RCA R", "3.5 mm")
+JACK_HOLES = {"3.5 mm": 9.0}               # plug-sized where the plug reaches into the wall
+# The DAC goes on last, pressed straight down onto the header, so its jack
+# holes are slots open to the top of the back wall; the lid closes them.
 
 # --- The box ---------------------------------------------------------------
 WALL, FLOOR, GAP, LIP, CLEARANCE, PORT_GAP = 2.4, 2.0, 0.4, 2.5, 2.0, 1.0
@@ -102,7 +105,7 @@ BOARD_Z = FLOOR + STANDOFF_H                 # Pi board bottom
 STACK_TOP = BOARD_Z + PI_T + HAT_GAP + HAT_T + JACK_BODY[2]
 BASE_H = STACK_TOP + CLEARANCE + NUT_H       # the screen's back (and nuts) sit on top
 LID_H = SCREEN_T + WALL
-PI_X = WALL + 0.4                            # its USB-A end against the left wall
+PI_X = WALL + 0.2 + 2.2                      # its USB-A jacks (2.2 past the board) just short of the left wall
 PI_Y = OUT_D - WALL - PI_D - BACK_GAP        # its USB-C edge near the back wall
 SCREEN_X, SCREEN_Y = (OUT_W - SCREEN_W) / 2, (OUT_D - SCREEN_D) / 2
 SCREEN_Z = BASE_H                            # the back of the screen's board
@@ -237,7 +240,9 @@ def port_cutouts():
     for name, jx, d, cz, _ in HAT_JACKS:
         if name in CUT_JACKS:
             x, _, _ = placed(jx, 0)
-            cuts.append(Pos(x, OUT_D - WALL - 1, hz + cz) * Rot(-90, 0, 0) * Cylinder(d / 2 + PORT_GAP, WALL + 2, align=CTR_XY))
+            r = JACK_HOLES.get(name, d + 2 * PORT_GAP) / 2
+            cuts.append(Pos(x, OUT_D - WALL - 1, hz + cz) * Rot(-90, 0, 0) * Cylinder(r, WALL + 2, align=CTR_XY))
+            cuts.append(Pos(x, OUT_D - WALL - 1, hz + cz) * Box(2 * r, WALL + 2, BASE_H, align=(Align.CENTER, Align.MIN, Align.MIN)))
     return cuts
 
 
@@ -279,6 +284,14 @@ def lid_model():
 
 # --- Run ---------------------------------------------------------------------
 
+def atomic(path, write):
+    """Write to a temporary name, then rename into place, so the viewer (or a
+    second build racing this one) never reads half a file."""
+    tmp = path.with_name(f"{path.stem}.tmp{os.getpid()}{path.suffix}")
+    write(str(tmp))
+    os.replace(tmp, path)
+
+
 def solids_of(shape):
     return list(shape.solids()) if hasattr(shape, "solids") else [shape]
 
@@ -308,11 +321,11 @@ def main():
     manifest = []
     for name, shapes in groups.items():
         comp = Compound(children=shapes, label=name)
-        export_gltf(comp, str(LIVE / f"{name}.glb"), binary=True, linear_deflection=0.1, angular_deflection=0.4)
+        atomic(LIVE / f"{name}.glb", lambda f: export_gltf(comp, f, binary=True, linear_deflection=0.1, angular_deflection=0.4))
         manifest.append({"name": name, "file": f"{name}.glb", "printed": name in ("base", "lid")})
-    export_stl(groups["base"][0], str(OUT / "base.stl"))
-    export_stl(Pos(0, 0, -BASE_H) * groups["lid"][0], str(OUT / "lid.stl"))
-    export_step(Compound(children=groups["base"] + groups["lid"]), str(OUT / "enclosure.step"))
+    atomic(OUT / "base.stl", lambda f: export_stl(groups["base"][0], f))
+    atomic(OUT / "lid.stl", lambda f: export_stl(Pos(0, 0, -BASE_H) * groups["lid"][0], f))
+    atomic(OUT / "enclosure.step", lambda f: export_step(Compound(children=groups["base"] + groups["lid"]), f))
 
     # Collisions: every pair of parts from different groups (a group's own
     # pieces touch by design), by volume of overlap.
@@ -334,7 +347,7 @@ def main():
             hits.append({"a": a.label, "b": b.label, "mm3": round(vol, 2)})
             overlaps.append(tag(Compound(solids), f"{a.label} × {b.label}", "#ff2d2d"))
     if overlaps:
-        export_gltf(Compound(children=overlaps), str(LIVE / "collisions.glb"), binary=True)
+        atomic(LIVE / "collisions.glb", lambda f: export_gltf(Compound(children=overlaps), f, binary=True))
     elif (LIVE / "collisions.glb").exists():
         os.remove(LIVE / "collisions.glb")
     report = {
@@ -342,9 +355,9 @@ def main():
         "collisions": hits,
         "seconds": round(time.time() - t0, 1),
     }
-    (LIVE / "parts.json").write_text(json.dumps(manifest))
-    (LIVE / "report.json").write_text(json.dumps(report, indent=1))
-    (LIVE / "stamp.txt").write_text(str(time.time_ns()))
+    atomic(LIVE / "parts.json", lambda f: Path(f).write_text(json.dumps(manifest)))
+    atomic(LIVE / "report.json", lambda f: Path(f).write_text(json.dumps(report, indent=1)))
+    atomic(LIVE / "stamp.txt", lambda f: Path(f).write_text(str(time.time_ns())))
     print(json.dumps(report))
 
 

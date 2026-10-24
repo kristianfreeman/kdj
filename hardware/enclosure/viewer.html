@@ -43,6 +43,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(devicePixelRatio);
@@ -73,13 +74,40 @@ const groups = {};   // name -> { obj, printed }
 let collisions = null;
 let center = new THREE.Vector3(), radius = 120, first = true;
 
+// The Pi's STEP arrives as ~11,000 meshes, one draw call each: merge every
+// part into one mesh per material (and attribute layout).
+function flatten(root) {
+  root.updateMatrixWorld(true);
+  const buckets = new Map();
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    let g = o.geometry.clone().applyMatrix4(o.matrixWorld);
+    if (!g.index) g = g.toNonIndexed();
+    const key = `${o.material.uuid}|${Object.keys(g.attributes).sort()}|${!!g.index}`;
+    if (!buckets.has(key)) buckets.set(key, { mat: o.material, geos: [] });
+    buckets.get(key).geos.push(g);
+  });
+  const out = new THREE.Group();
+  for (const { mat, geos } of buckets.values()) {
+    const merged = mergeGeometries(geos, false);
+    if (merged) out.add(new THREE.Mesh(merged, mat));
+  }
+  return out;
+}
+
 function prep(obj, printed) {
   obj.traverse((o) => {
     if (!o.isMesh) return;
     // Exported materials come in metallic, which renders near black with no
     // environment to reflect: make them matte.
     if ('metalness' in o.material) { o.material.metalness = 0; o.material.roughness = 0.75; }
-    o.userData.base = o.material.clone();
+    o.material.side = THREE.DoubleSide;
+    // Made once: swapping materials is cheap, making them recompiles shaders.
+    o.userData.solid = o.material;
+    if (printed) {
+      o.userData.xray = o.material.clone();
+      Object.assign(o.userData.xray, { transparent: true, opacity: 0.25, depthWrite: false });
+    }
   });
   obj.userData.printed = printed;
   // build123d writes glTF in metres, turned Y up; the scene is mm, Z up.
@@ -94,7 +122,7 @@ async function load(stamp) {
   for (const part of manifest) {
     const g = await gltf.loadAsync(`live/${part.file}?${stamp}`);
     if (groups[part.name]) scene.remove(groups[part.name].obj);
-    const obj = prep(g.scene, part.printed);
+    const obj = prep(flatten(g.scene), part.printed);
     groups[part.name] = { obj, printed: part.printed };
     scene.add(obj);
     box.expandByObject(obj);
@@ -102,7 +130,7 @@ async function load(stamp) {
   if (collisions) { scene.remove(collisions); collisions = null; }
   try {
     const c = await gltf.loadAsync(`live/collisions.glb?${stamp}`);
-    collisions = prep(c.scene, false);
+    collisions = prep(flatten(c.scene), false);
     collisions.traverse((o) => { if (o.isMesh) o.material = new THREE.MeshBasicMaterial({ color: 0xff2d2d, depthTest: false, transparent: true, opacity: 0.85 }); });
     collisions.renderOrder = 10;
     scene.add(collisions);
@@ -136,13 +164,7 @@ function apply() {
     const o = g.obj;
     o.position.set(0, 0, name === 'lid' ? ex : name === 'screen' ? ex * 0.92 : name === 'ribbon' ? ex * 0.3 : 0);
     o.visible = name === 'base' ? showBase.checked : name === 'lid' ? showLid.checked : showGhosts.checked;
-    o.traverse((m) => {
-      if (!m.isMesh) return;
-      const mat = m.userData.base.clone();
-      if (xray && g.printed) { mat.transparent = true; mat.opacity = 0.25; mat.depthWrite = false; }
-      mat.side = THREE.DoubleSide;
-      m.material = mat;
-    });
+    if (g.printed) o.traverse((m) => { if (m.isMesh) m.material = xray ? m.userData.xray : m.userData.solid; });
   }
 }
 
@@ -165,10 +187,11 @@ async function poll() {
   try {
     const s = (await (await fetch('live/stamp.txt', { cache: 'no-store' })).text()).trim();
     if (s !== seen) { seen = s; await load(s); }
-  } catch (e) {}
+  } catch (e) { console.error(e); }
   setTimeout(poll, 700);
 }
 poll();
+window.kdj = { renderer, scene };   // for poking at from the console
 (function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); })();
 </script>
 </body>
