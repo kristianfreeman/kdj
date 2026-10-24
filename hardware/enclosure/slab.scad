@@ -113,11 +113,29 @@ module test_plate() {
     }
 }
 
+// Stand-ins for what goes inside, to see the fit (not printed): the Pi's
+// board, the DAC on it, its RCA jacks, and the screen under the lid.
+module ghost_pi() {
+    translate([pi_x, pi_y, board_z]) {
+        cube([pi_w, pi_d, 1.6]);                                        // Pi 4 board
+        translate([0, 0, 1.6 + 11]) cube([65, 56.5, 1.6]);              // DAC HAT board
+        for (p = back_ports) if (p[1] > 0)                              // RCA jacks
+            translate([p[0], pi_d - 12, 1.6 + p[1]]) cube([p[2], 13, p[3]]);
+        translate([pi_w - 21, 2, 1.6]) cube([21, 53, 16]);              // USB-A / Ethernet
+    }
+}
+module ghost_screen() {
+    translate([out_w / 2 - screen_w / 2, out_d / 2 - screen_h / 2, base_h]) cube([screen_w, screen_h, screen_t]);
+}
+
 echo(str("slab: ", out_w, " x ", out_d, " x ", base_h + lid_h, " mm"));
 
 if (part == "base") base();
 else if (part == "lid") lid();
 else if (part == "test") test_plate();
+else if (part == "lid_placed") translate([0, out_d, base_h + lid_h]) rotate([180, 0, 0]) lid();
+else if (part == "ghost_pi") ghost_pi();
+else if (part == "ghost_screen") ghost_screen();
 else {
     color("#2a2d33") base();
     color("#8a8f98") translate([0, out_d, base_h + lid_h]) rotate([180, 0, 0]) lid();

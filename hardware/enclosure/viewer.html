@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kdj enclosure</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0b0c0e; color: #e8e8e8; font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+  #ui { position: fixed; top: 12px; left: 12px; background: #16181ccc; border: 1px solid #2a2d33; border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; min-width: 220px; }
+  #ui b { font-size: 14px; }
+  #ui label { display: flex; align-items: center; gap: 8px; }
+  #ui input[type=range] { flex: 1; }
+  #size, #stamp { color: #8a8f98; }
+  button { background: #22252b; color: #e8e8e8; border: 1px solid #3a3e45; border-radius: 6px; padding: 4px 8px; font: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <b>kdj enclosure · slab</b>
+  <span id="size">loading…</span>
+  <label>Explode <input id="explode" type="range" min="0" max="80" value="0"></label>
+  <label><input id="showLid" type="checkbox" checked> Lid</label>
+  <label><input id="showBase" type="checkbox" checked> Base</label>
+  <label><input id="showGhosts" type="checkbox" checked> Pi, DAC, screen (see-through)</label>
+  <label><input id="xray" type="checkbox"> X-ray the box</label>
+  <div style="display:flex; gap:6px"><button id="front">Front</button><button id="back">Back</button><button id="top">Top</button><button id="iso">3/4</button></div>
+  <span id="stamp"></span>
+</div>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+
+// Parts the watcher exports (tools/enclosure-live.sh), in OpenSCAD's mm, Z up.
+const PARTS = {
+  base:         { color: 0x2f3440, ghost: false },
+  lid_placed:   { color: 0x9aa0aa, ghost: false },
+  ghost_pi:     { color: 0x3b82f6, ghost: true },
+  ghost_screen: { color: 0xf59e0b, ghost: true },
+};
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0c0e);
+const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 1, 5000);
+camera.up.set(0, 0, 1);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(150, -200, 300);
+scene.add(sun);
+const grid = new THREE.GridHelper(400, 40, 0x333842, 0x1c1f24);
+grid.rotation.x = Math.PI / 2;
+scene.add(grid);
+
+const loader = new STLLoader();
+const meshes = {};
+let center = new THREE.Vector3(), radius = 120, first = true;
+
+function material(part) {
+  const p = PARTS[part];
+  const xray = document.getElementById('xray').checked && !p.ghost;
+  return new THREE.MeshStandardMaterial({
+    color: p.color, roughness: 0.7, metalness: 0.05,
+    transparent: p.ghost || xray, opacity: p.ghost ? 0.45 : xray ? 0.25 : 1,
+    depthWrite: !(p.ghost || xray), side: THREE.DoubleSide,
+  });
+}
+
+async function load(stamp) {
+  const box = new THREE.Box3();
+  for (const part of Object.keys(PARTS)) {
+    try {
+      const geo = await loader.loadAsync(`live/${part}.stl?${stamp}`);
+      geo.computeVertexNormals();
+      if (meshes[part]) { scene.remove(meshes[part]); meshes[part].geometry.dispose(); }
+      const m = new THREE.Mesh(geo, material(part));
+      m.userData.part = part;
+      meshes[part] = m;
+      scene.add(m);
+      geo.computeBoundingBox();
+      box.union(geo.boundingBox);
+    } catch (e) { /* not exported (yet) */ }
+  }
+  if (!box.isEmpty()) {
+    box.getCenter(center);
+    const s = box.getSize(new THREE.Vector3());
+    radius = Math.max(s.x, s.y, s.z);
+    document.getElementById('size').textContent = `${s.x.toFixed(1)} × ${s.y.toFixed(1)} × ${s.z.toFixed(1)} mm`;
+    if (first) { view('iso'); first = false; }
+  }
+  apply();
+  document.getElementById('stamp').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+
+function apply() {
+  const ex = +document.getElementById('explode').value;
+  for (const [part, m] of Object.entries(meshes)) {
+    m.material = material(part);
+    m.position.z = part === 'lid_placed' ? ex : part === 'ghost_screen' ? ex * 0.9 : 0;
+    m.visible = part === 'base' ? showBase.checked : part === 'lid_placed' ? showLid.checked : showGhosts.checked;
+  }
+}
+
+function view(which) {
+  const d = radius * 2.2;
+  const dirs = { front: [0, -1, 0.35], back: [0, 1, 0.35], top: [0, -0.001, 1], iso: [0.9, -1.1, 0.9] };
+  const v = new THREE.Vector3(...dirs[which]).normalize().multiplyScalar(d);
+  camera.position.copy(center).add(v);
+  controls.target.copy(center);
+  controls.update();
+}
+
+for (const id of ['explode', 'showLid', 'showBase', 'showGhosts', 'xray']) document.getElementById(id).addEventListener('input', apply);
+for (const id of ['front', 'back', 'top', 'iso']) document.getElementById(id).addEventListener('click', () => view(id));
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+// Reload the parts when the watcher re-exports them; the camera stays put.
+let seen = null;
+async function poll() {
+  try {
+    const s = (await (await fetch('live/stamp.txt', { cache: 'no-store' })).text()).trim();
+    if (s !== seen) { seen = s; await load(s); }
+  } catch (e) {}
+  setTimeout(poll, 700);
+}
+poll();
+(function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>
