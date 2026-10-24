@@ -236,3 +236,76 @@ fn guarded(f: impl FnOnce()) {
     #[cfg(not(debug_assertions))]
     f();
 }
+
+/// Whether the sound card takes samples as fast as it says it does. A DAC
+/// set up with the wrong clock (a PCM5122 board driven as a DAC+ Pro) plays
+/// everything at the wrong speed and pitch while reporting the right rate;
+/// counting what it takes against the wall clock for a few seconds shows it.
+#[derive(Debug, Default)]
+pub struct ClockCheck {
+    since: Option<Instant>,
+    frames: u64,
+    done: bool,
+}
+
+impl ClockCheck {
+    /// How long to count for.
+    const OVER: std::time::Duration = std::time::Duration::from_secs(5);
+    /// How far off counts as wrong (a clock is off by far more, or not at all).
+    const TOLERANCE: f64 = 0.05;
+
+    /// Count a callback's `frames`, seen at `now`. Once, after a few seconds:
+    /// how many times too fast the card runs, if that's not about once.
+    pub fn add(&mut self, frames: u32, now: Instant, rate: u32) -> Option<f64> {
+        if self.done {
+            return None;
+        }
+        // From the second callback: the first also fills the card's buffer.
+        let Some(since) = self.since else {
+            self.since = Some(now);
+            return None;
+        };
+        self.frames += u64::from(frames);
+        let secs = now.duration_since(since).as_secs_f64();
+        if secs < Self::OVER.as_secs_f64() {
+            return None;
+        }
+        self.done = true;
+        #[expect(clippy::cast_precision_loss, reason = "a few seconds of frames, far inside f64")]
+        let ratio = self.frames as f64 / secs / f64::from(rate);
+        ((ratio - 1.0).abs() > Self::TOLERANCE).then_some(ratio)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    /// 128-frame callbacks for `secs` of wall time, at `per_sec` frames a second.
+    fn run(check: &mut ClockCheck, per_sec: u64, secs: u64) -> Option<f64> {
+        let t0 = Instant::now();
+        let mut found = None;
+        for i in 0..=per_sec * secs / 128 {
+            let at = t0 + Duration::from_nanos(i * 128 * 1_000_000_000 / per_sec);
+            if let Some(ratio) = check.add(128, at, 48_000) {
+                found = Some(ratio);
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn a_card_at_its_rate_passes() {
+        assert_eq!(run(&mut ClockCheck::default(), 48_000, 6), None);
+    }
+
+    #[test]
+    fn a_card_at_double_speed_is_caught_once() {
+        let mut check = ClockCheck::default();
+        let ratio = run(&mut check, 96_000, 6).expect("caught");
+        assert!((ratio - 2.0).abs() < 0.01, "{ratio}");
+        assert_eq!(run(&mut check, 96_000, 6), None, "said once");
+    }
+}

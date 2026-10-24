@@ -821,7 +821,13 @@ fn run() -> Result<()> {
     let debug = std::env::var_os("KDJ_DEBUG_INPUT").is_some();
     let mut input = Input { keymap, held: HashMap::new(), touch: touch::Touch::default(), finger: None, debug };
     let mut frames = Frames { started: Instant::now(), loaded: false, snaps: Vec::with_capacity(app.slots.len()) };
-    let mut audio_watch = AudioWatch { errors: 0, lost: false, logged: Instant::now(), rt_logged: false };
+    let mut audio_watch = AudioWatch {
+        errors: 0,
+        lost: false,
+        logged: Instant::now(),
+        rt_logged: false,
+        clock: audio::ClockCheck::default(),
+    };
     // Without vsync, pace the loop to about 60 fps instead of spinning a core.
     let pace = (!screen.vsync).then(|| Duration::from_micros(16_667));
 
@@ -850,6 +856,13 @@ fn run() -> Result<()> {
         frames.loaded |= app.settle_loads();
         while let Ok(s) = audio.stats.pop() {
             app.hud.callback(s, sample_rate);
+            if let Some(ratio) = audio_watch.clock.add(s.frames, Instant::now(), sample_rate) {
+                let msg = format!(
+                    "The sound card runs {ratio:.2}× too fast: everything plays at the wrong speed (the DAC's clock setting)"
+                );
+                eprintln!("audio: {msg}");
+                app.status = msg;
+            }
         }
         audio_watch.check(&mut app, &audio);
         frames.render(&mut app, &screen.window, &audio.errors);
@@ -936,6 +949,8 @@ struct AudioWatch {
     logged: Instant,
     /// The audio thread's realtime status was logged.
     rt_logged: bool,
+    /// Whether the sound card keeps time.
+    clock: audio::ClockCheck,
 }
 
 impl AudioWatch {

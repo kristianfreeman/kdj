@@ -148,8 +148,10 @@ boot partition) or over SSH:
    For an HDMI screen, give its mode: `KDJ_HDMI_MODE=800x480@60 deploy/pi/setup.sh`.
 3. Check two things in `/boot/firmware/config.txt`, in the block between
    the `kdj` markers:
-   - **DAC hat**: `hifiberry-dacplus` suits most PCM5122 boards; some want
-     `hifiberry-dacplus-std` or `iqaudio-dacplus`.
+   - **DAC hat**: `hifiberry-dacplus-std` (the Pi clocks the DAC) suits any
+     PCM5122 board. Plain `hifiberry-dacplus` relies on a DAC+ Pro's own
+     clock chips and plays at double speed on boards without them; the deck
+     warns at start if its audio clock is off.
    - **Display**: nothing for HDMI; for a DSI panel, uncomment its overlay.
 4. `sudo reboot`. The deck comes up full screen.
 

@@ -164,7 +164,7 @@ done
 case $cmd in *" console=tty1 "*) fail "console still on tty1" ;; esac
 [ "$(wc -l </boot/firmware/cmdline.txt)" -eq 1 ] || fail "cmdline.txt is not one line"
 for l in '^#dtoverlay=vc4-kms-v3d  # kdj' '^#dtparam=audio=on  # kdj' '^dtoverlay=vc4-kms-v3d,noaudio$' \
-    '^dtparam=audio=off$' '^dtoverlay=hifiberry-dacplus$' '^dtoverlay=disable-bt$' '^disable_splash=1$'; do
+    '^dtparam=audio=off$' '^dtoverlay=hifiberry-dacplus-std$' '^dtoverlay=disable-bt$' '^disable_splash=1$'; do
     grep -q "$l" /boot/firmware/config.txt || fail "config.txt lacks $l"
 done
 # Imager's customisation and first boot need these untouched.

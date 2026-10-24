@@ -6,10 +6,11 @@
 dtoverlay=vc4-kms-v3d,noaudio
 dtparam=audio=off
 
-# The PCM5122 DAC hat. Most PCM5122 boards work as a HiFiBerry DAC+;
-# boards without its clock chip want hifiberry-dacplus-std, and IQaudio
-# boards iqaudio-dacplus. Check your board's docs.
-dtoverlay=hifiberry-dacplus
+# The PCM5122 DAC hat, clocked by the Pi (-std): right on any PCM5122 board.
+# Plain hifiberry-dacplus trusts the board's own clock chips, and on a board
+# whose chips aren't a DAC+ Pro's everything plays at the wrong speed (ours:
+# twice as fast). The deck checks its audio clock at start and says so.
+dtoverlay=hifiberry-dacplus-std
 
 # The display. HDMI screens need nothing here (set the mode in cmdline.txt,
 # see install.sh). For a DSI panel, uncomment the line for yours, e.g.:
