@@ -68,6 +68,8 @@ PI_W, PI_D, PI_T = 85.0, 56.0, 1.6
 PI_HOLES = [(3.5, 3.5), (61.5, 3.5), (3.5, 52.5), (61.5, 52.5)]
 DSI_ON_PI = (2.5, 28.0)                     # DISPLAY connector, Pi coordinates (approx.)
 STANDOFF_H = 4.0
+SOC_ON_PI, SOC_H = (29.23, 32.63), 2.3         # the processor, from the STEP: 14.6 mm square
+HEATSINK = (14.0, 14.0, 6.0)                 # a stick-on aluminium one; clears the HAT by ~3 mm
 
 PAD_T = 0.1                                 # the STEP's copper pads, proud of the board
 # Ports, Pi coordinates: name, edge ("s" = USB-C edge, "e" = USB-A end),
@@ -101,7 +103,7 @@ JACK_HOLES = {"3.5 mm": 9.0}               # plug-sized where the plug reaches i
 HEADER_PUSH = 7.5
 
 # --- The box ---------------------------------------------------------------
-WALL, FLOOR, GAP, LIP, CLEARANCE, PORT_GAP = 2.4, 2.0, 0.4, 2.5, 2.0, 1.0
+WALL, FLOOR, GAP, LIP, CLEARANCE, PORT_GAP = 2.4, 2.0, 0.6, 2.5, 2.0, 1.0
 IN_W = max(SCREEN_W, PI_W + 10) + 2 * GAP
 IN_D = max(SCREEN_D, PI_D + 10) + 2 * GAP
 OUT_W, OUT_D = IN_W + 2 * WALL, IN_D + 2 * WALL
@@ -120,19 +122,28 @@ POST_TOP = SCREEN_Z - NUT_H
 POST_R, BORE_R, SHELF = 4.5, 3.0, 3.0        # bore from below for the screwdriver; M2.5 x 6 through the shelf
 TOP_Z = SCREEN_Z + SCREEN_T                  # no lid: the walls rise to the glass, which sits flush
 
-# --- The kickstand -----------------------------------------------------------
-# Three nested U-shaped legs on one hinge under the back of the floor, one per
-# angle: fold out the one you want. Each opens until a stub behind the hinge
-# meets its own stop, a little past vertical so the box's weight holds it
-# there. Folded, they lie in the skirt under the floor. A single leg can't do
-# this: at the shallow angles it would lie nearly flat and fold under a tap.
-SKIRT = 9.0                                  # walls run this far below the floor
-LEG_T, ARM_W, ARM_GAP, LUG_W, FOOT_W = 4.0, 4.5, 0.5, 3.0, 8.0
-AXIS_Y, AXIS_Z = OUT_D - WALL - 6, -5.5      # the hinge: an M3 x 30 and nut each side
+# --- Feet and kickstand -------------------------------------------------------
+# Nothing hangs below the floor, so the base prints floor-down without
+# support. Under it, screwed on: two hinge rails at the back (their spines
+# are the back feet) and two printed front feet; the box stands FEET_H high,
+# which lets air in through the floor vents and leaves room for the legs.
+# Three nested U-shaped legs share the rails' hinge, one per angle: fold out
+# the one you want. Each swings until a tooth on its hub lands flat on the
+# floor, a little past vertical, so the box's weight holds it there. A single
+# leg can't do this: at the shallow angles it would lie nearly flat and fold
+# under a tap.
+FEET_H, PAD_T, FOOT_R = 8.0, 1.0, 6.0        # stick-on rubber pads under the feet and spines
+FRONT_FEET = [(18.0, FOOT_R + 2), (OUT_W - 18.0, FOOT_R + 2)]   # clear of the screen's screw bores
+LEG_T, ARM_W, ARM_GAP, LUG_W, FOOT_W = 6.0, 4.5, 0.5, 3.0, 8.0
+AXIS_Y, AXIS_Z = OUT_D - 13.0, -(LEG_T / 2 + 0.6)   # the hinge: an M3 x 30 and nut each side
+TOOTH_R = 5.5
+SPINE_Y = AXIS_Y + TOOTH_R + 1.0             # the rails' spines start behind the teeth
 OVER = 5.0                                   # degrees past vertical
-TAIL = (2.5, 5.0)                            # the stub behind the hinge that meets the stop
 LEGS = (45, 30, 15)                          # outermost (longest) first
+SET_W = 2 * LUG_W + ARM_GAP + len(LEGS) * (ARM_W + ARM_GAP)
 SETS_X = (3.0, 112.5)                        # left set starts, right set ends: clear of the Pi's and screen's screws
+BOSS_H = 2.0                                 # floor bosses for the rails' M3 x 3 heat-set inserts
+RAIL_SCREWS = [(x, (SPINE_Y + OUT_D - 0.5) / 2) for x0 in (SETS_X[0], SETS_X[1] - SET_W) for x in (x0 + 5.5, x0 + SET_W - 5.5)]
 TILT = float(os.environ.get("TILT", 30))     # shown on this leg (0: flat, all folded)
 
 
@@ -163,9 +174,10 @@ def opening(angle):
 
 def leg_length(angle):
     """Hinge to foot, so the foot meets the desk with the box resting on its
-    front bottom edge at angle."""
+    front feet at angle."""
     t = math.radians(angle)
-    hy, hz = AXIS_Y, AXIS_Z + SKIRT          # the hinge, from the front bottom edge
+    py, pz = FRONT_FEET[0][1] - FOOT_R, -FEET_H   # the front feet's front edge: the box pivots on it
+    hy, hz = AXIS_Y - py, AXIS_Z - pz
     to_centre = (hy * math.sin(t) + hz * math.cos(t)) / math.sin(math.radians(opening(angle) + angle))
     return to_centre - LEG_T / 2 * math.sin(math.radians(OVER))   # the foot's corner, tipped past vertical, is lowest
 
@@ -197,6 +209,12 @@ def pi_model():
     pi = Pos(0, 0, PI_T + PAD_T) * pi
     pi = Pos(*placed(0, 0, BOARD_Z)) * Rot(0, 0, 180) * pi
     return tag(pi, "Raspberry Pi 4", "#2e7d32")
+
+
+def heatsink_model():
+    x, y, _ = placed(*SOC_ON_PI)
+    z = BOARD_Z + PAD_T + PI_T + SOC_H
+    return tag(Pos(x, y, z) * Box(*HEATSINK, align=CTR_XY), "Heatsink", "#b0b4ba")
 
 
 def dac_model():
@@ -299,48 +317,88 @@ def port_cutouts():
 
 
 def base_model():
-    base = Pos(0, 0, -SKIRT) * Box(OUT_W, OUT_D, TOP_Z + SKIRT, align=MIN)
-    base -= Pos(WALL, WALL, FLOOR) * Box(IN_W, IN_D, TOP_Z, align=MIN)
-    base -= Pos(WALL, WALL, -SKIRT - 1) * Box(IN_W, IN_D, SKIRT + 1, align=MIN)   # under the floor, for the legs
+    """Printed floor-down with no support: nothing hangs below the floor, and
+    nothing inside overhangs past 45 degrees."""
+    base = Box(OUT_W, OUT_D, TOP_Z, align=MIN) - Pos(WALL, WALL, FLOOR) * Box(IN_W, IN_D, TOP_Z, align=MIN)
     for c in port_cutouts():
         base -= c
-    for i in range(8):                              # floor vents under the Pi
+    for i in range(8):                              # floor vents under the Pi: air in
         x, y, _ = placed(PI_W - 14 - i * 8, PI_D - 12)
         base -= Pos(x, y, -1) * Box(3, PI_D - 24, FLOOR + 2, align=MIN)
-    for i in range(8):                              # right wall vents
-        base -= Pos(OUT_W - WALL - 1, WALL + 10 + i * 7, FLOOR + 4) * Box(WALL + 2, 3, BASE_H * 0.5, align=MIN)
-    for hx, hy in PI_HOLES:                         # Pi standoffs: M2.5 up from under the floor
+    for i in range(8):                              # right wall vents, up high: hot air out
+        base -= Pos(OUT_W - WALL - 1, WALL + 10 + i * 7, FLOOR + 4) * Box(WALL + 2, 3, POST_TOP - FLOOR - 8, align=MIN)
+    for hx, hy in PI_HOLES:                         # Pi standoffs: M2.5 up from under the floor, heads recessed
         x, y, _ = placed(hx, hy)
         base += Pos(x, y, FLOOR) * Cylinder(3, STANDOFF_H, align=CTR_XY)
         base -= Pos(x, y, -1) * Cylinder(1.4, FLOOR + STANDOFF_H + 2, align=CTR_XY)
+        base -= Pos(x, y, -1) * Cylinder(2.5, FLOOR + 1, align=CTR_XY)
     back_left = min(SCREEN_CORNERS, key=lambda p: p[0] - p[1])
     for x, y in SCREEN_CORNERS:
-        if (x, y) == back_left:                     # a ledge off the two walls, above the USB-A jacks
-            ledge = Pos(WALL - 0.1, y - POST_R, POST_TOP - 6) * Box(x + POST_R - WALL, OUT_D - WALL - y + POST_R + 0.1, 6, align=MIN)
+        if (x, y) == back_left:
+            # A shelf off the two walls, above the USB-A jacks, its underside
+            # sloping 45 degrees down to the back wall so it needs no support.
+            y0 = y - POST_R
+            depth = OUT_D - WALL - y0
+            ledge = Pos(WALL - 0.1, y0, POST_TOP - 3 - depth) * Box(x + POST_R - WALL, depth + 0.1, 3 + depth, align=MIN)
+            ledge -= Pos(0, y0, POST_TOP - 3) * Rot(-45, 0, 0) * Box(4 * OUT_W, 200, 200, align=(Align.CENTER, Align.CENTER, Align.MAX))
             base += ledge
             continue
         base += Pos(x, y, 0) * Cylinder(POST_R, POST_TOP, align=CTR_XY)
         base -= Pos(x, y, -1) * Cylinder(BORE_R, POST_TOP - SHELF + 1, align=CTR_XY)
         base -= Pos(x, y, -1) * Cylinder(1.4, POST_TOP + 2, align=CTR_XY)
-    for x0, x1 in lug_x():                          # the hinge's lugs
-        base += Pos(x0, AXIS_Y - 4, AXIS_Z - 3) * Box(x1 - x0, 8, -AXIS_Z + 3.5, align=MIN)
-    for i, angle in enumerate(LEGS):                # each leg's stop, against its stub when open
-        for x0, x1 in arm_x(i):
-            block = about_axis(opening(angle)) * (Pos(x0, AXIS_Y + TAIL[0], AXIS_Z + LEG_T / 2) * Box(x1 - x0, TAIL[1] - TAIL[0], 12, align=MIN))
-            base += block & (Pos(x0, AXIS_Y - 15, AXIS_Z) * Box(x1 - x0, 30, -AXIS_Z + 0.5, align=MIN))
-    base -= Pos(0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(1.6, 3 * OUT_W)
+    for x, y in RAIL_SCREWS:                        # bosses for the rails' inserts, pressed in from below
+        base += Pos(x, y, FLOOR) * Cylinder(3.5, BOSS_H, align=CTR_XY)
+        base -= Pos(x, y, -1) * Cylinder(2.0, FLOOR + BOSS_H + 1 - 0.6, align=CTR_XY)
+    for x, y in FRONT_FEET:                         # shallow recesses to locate the front feet
+        base -= Pos(x, y, -1) * Cylinder(FOOT_R + 0.2, 1.6, align=CTR_XY)
     return tag(base, "Base (printed)", "#6b7380")
 
 
+def rail_model(side):
+    """A hinge rail, screwed under the back of the floor: lugs for the pin, and a
+    spine behind the legs' teeth that is also a back foot. Prints spine-face
+    down."""
+    x0 = SETS_X[0] if side == 0 else SETS_X[1] - SET_W
+    bottom = -(FEET_H - PAD_T)
+    rail = Pos(x0, SPINE_Y, bottom) * Box(SET_W, OUT_D - 0.5 - SPINE_Y, -bottom, align=MIN)
+    for l0, l1 in lug_x()[2 * side:2 * side + 2]:
+        rail += Pos(l0, AXIS_Y - 4.5, AXIS_Z - 3) * Box(l1 - l0, SPINE_Y - AXIS_Y + 4.5 + 0.01, 3 - AXIS_Z, align=MIN)
+    rail -= Pos(0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(1.6, 3 * OUT_W)
+    for x, y in RAIL_SCREWS[2 * side:2 * side + 2]:  # M3 x 8 up into the floor's inserts, heads recessed
+        rail -= Pos(x, y, bottom - 1) * Cylinder(1.7, -bottom + 2, align=CTR_XY)
+        rail -= Pos(x, y, bottom - 1) * Cylinder(3.0, 3.5, align=CTR_XY)
+    return tag(rail, f"Hinge rail, {'left' if side == 0 else 'right'}", "#8a6fb3")
+
+
+def foot_model(x, y):
+    """A front foot: glued into its recess, a rubber pad under it."""
+    return tag(Pos(x, y, -(FEET_H - PAD_T)) * Cylinder(FOOT_R, FEET_H - PAD_T + 0.5, align=CTR_XY), "Front foot", "#8a6fb3")
+
+
+def tooth(angle, a0):
+    """The hub's tooth for one arm, folded. Open, its top face lies flat on the
+    floor. It's kept 2.5 mm or more behind the hinge, where it rises steeply
+    as the leg opens: it meets the floor only at full open, and a 0.1 mm
+    printing error moves the stop by about 2 degrees. Folded, it stays inside
+    the arm's thickness, so the leg prints flat."""
+    a = opening(angle)
+    disc = Pos(a0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(TOOTH_R, ARM_W, align=(Align.CENTER, Align.CENTER, Align.MIN))
+    behind = Pos(a0, AXIS_Y + 2.5, AXIS_Z) * Box(ARM_W, 10, -AXIS_Z, align=MIN)    # above the hinge, up to the floor
+    flat_when_folded = about_axis(a) * (Pos(a0, AXIS_Y - 50, AXIS_Z - LEG_T / 2) * Box(ARM_W, 100, LEG_T, align=MIN))
+    return about_axis(-a) * (disc & behind & flat_when_folded)
+
+
 def leg_model(i, angle, open_):
-    """A U: two arms from the hinge, joined at the foot, and a stub behind the
-    hinge. Folded unless open_."""
+    """A U: two arms from the hinge, joined at the foot, each with a round hub
+    and a tooth. Folded unless open_. Prints flat."""
     length = leg_length(angle)
     (l0, l1), (r0, r1) = arm_x(i)
     y0, z0 = AXIS_Y - length, AXIS_Z - LEG_T / 2
-    leg = Pos(l0, y0, z0) * Box(ARM_W, length + TAIL[1], LEG_T, align=MIN)
-    leg += Pos(r0, y0, z0) * Box(ARM_W, length + TAIL[1], LEG_T, align=MIN)
-    leg += Pos(l0, y0, z0) * Box(r1 - l0, FOOT_W, LEG_T, align=MIN)
+    leg = Pos(l0, y0, z0) * Box(r1 - l0, FOOT_W, LEG_T, align=MIN)
+    for a0 in (l0, r0):
+        leg += Pos(a0, y0, z0) * Box(ARM_W, length, LEG_T, align=MIN)
+        leg += Pos(a0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(LEG_T / 2, ARM_W, align=(Align.CENTER, Align.CENTER, Align.MIN))
+        leg += tooth(angle, a0)
     leg -= Pos(0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(1.6, 3 * OUT_W)
     if open_:
         leg = about_axis(opening(angle)) * leg
@@ -361,6 +419,8 @@ def solids_of(shape):
     return list(shape.solids()) if hasattr(shape, "solids") else [shape]
 
 
+PRINTED = ("base", "rails", "feet", "legs")
+
 # Parts that go into each other by design: the Pi's header pins into the DAC's socket.
 MATES = [{"Raspberry Pi 4", "DAC socket"}]
 
@@ -378,23 +438,30 @@ def main():
     groups = {
         "base": [base_model()],
         "legs": [leg_model(i, a, a == TILT) for i, a in enumerate(LEGS)],
-        "pi": [pi_model()],
+        "rails": [rail_model(0), rail_model(1)],
+        "feet": [foot_model(x, y) for x, y in FRONT_FEET],
+        "pi": [pi_model(), heatsink_model()],
         "dac": dac_model(),
         "screen": screen_model(),
         "ribbon": ribbon_model(),
     }
-    # Shown resting on the desk at TILT, on its front bottom edge and that leg.
-    on_desk = Rot(TILT, 0, 0) * Pos(0, 0, SKIRT)
+    # Shown resting on the desk at TILT, on its front feet and that leg.
+    pivot_y = FRONT_FEET[0][1] - FOOT_R
+    on_desk = Pos(0, pivot_y, 0) * Rot(TILT, 0, 0) * Pos(0, -pivot_y, FEET_H)
     manifest = []
     for name, shapes in groups.items():
         comp = on_desk * Compound(children=shapes, label=name)
         atomic(LIVE / f"{name}.glb", lambda f: export_gltf(comp, f, binary=True, linear_deflection=0.1, angular_deflection=0.4))
-        manifest.append({"name": name, "file": f"{name}.glb", "printed": name in ("base", "legs")})
-    # For printing: the base on its rim, each leg flat (as folded).
-    atomic(OUT / "base.stl", lambda f: export_stl(Pos(0, 0, SKIRT) * groups["base"][0], f))
+        manifest.append({"name": name, "file": f"{name}.glb", "printed": name in PRINTED})
+    # For printing: the base floor-down, the rails spine-face down, the feet
+    # and legs flat.
+    atomic(OUT / "base.stl", lambda f: export_stl(groups["base"][0], f))
+    for side, rail in zip(("left", "right"), groups["rails"]):
+        atomic(OUT / f"rail-{side}.stl", lambda f: export_stl(Rot(180, 0, 0) * rail, f))
+    atomic(OUT / "foot.stl", lambda f: export_stl(Pos(0, 0, FEET_H - PAD_T) * groups["feet"][0], f))
     for i, angle in enumerate(LEGS):
         atomic(OUT / f"leg-{angle}.stl", lambda f: export_stl(Pos(0, 0, LEG_T / 2 - AXIS_Z) * leg_model(i, angle, False), f))
-    atomic(OUT / "enclosure.step", lambda f: export_step(Compound(children=groups["base"] + groups["legs"]), f))
+    atomic(OUT / "enclosure.step", lambda f: export_step(Compound(children=[s for g in PRINTED for s in groups[g]]), f))
 
     # Collisions: every pair of parts from different groups (a group's own
     # pieces touch by design), by volume of overlap.
@@ -420,7 +487,7 @@ def main():
     elif (LIVE / "collisions.glb").exists():
         os.remove(LIVE / "collisions.glb")
     report = {
-        "size_mm": [round(OUT_W, 1), round(OUT_D, 1), round(TOP_Z + SKIRT, 1)],
+        "size_mm": [round(OUT_W, 1), round(OUT_D, 1), round(TOP_Z + FEET_H, 1)],
         "tilt": TILT,
         "legs_mm": {a: round(leg_length(a), 1) for a in LEGS},
         "collisions": hits,

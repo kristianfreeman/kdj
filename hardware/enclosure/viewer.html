@@ -27,7 +27,7 @@
   <span id="size">loading…</span>
   <label>Explode <input id="explode" type="range" min="0" max="80" value="0"></label>
   <label><input id="showLegs" type="checkbox" checked> Kickstand legs</label>
-  <label><input id="showBase" type="checkbox" checked> Base</label>
+  <label><input id="showBase" type="checkbox" checked> Base, rails, feet</label>
   <label><input id="showGhosts" type="checkbox" checked> Pi, DAC, screen, ribbon</label>
   <label><input id="xray" type="checkbox"> X-ray the box</label>
   <div style="display:flex; gap:6px"><button id="front">Front</button><button id="back">Back</button><button id="side">Side</button><button id="top">Top</button><button id="iso">3/4</button></div>
@@ -163,7 +163,7 @@ function apply() {
   for (const [name, g] of Object.entries(groups)) {
     const o = g.obj;
     o.position.set(0, 0, name === 'screen' ? ex * 0.92 : name === 'ribbon' ? ex * 0.3 : 0);
-    o.visible = name === 'base' ? showBase.checked : name === 'legs' ? showLegs.checked : showGhosts.checked;
+    o.visible = name === 'legs' ? showLegs.checked : g.printed ? showBase.checked : showGhosts.checked;
     if (g.printed) o.traverse((m) => { if (m.isMesh) m.material = xray ? m.userData.xray : m.userData.solid; });
   }
 }
