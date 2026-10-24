@@ -1,2 +1,4 @@
 preview/*.stl
 live/
+out/
+parts/

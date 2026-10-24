@@ -12,6 +12,8 @@
   #ui label { display: flex; align-items: center; gap: 8px; }
   #ui input[type=range] { flex: 1; }
   #size, #stamp { color: #8a8f98; }
+  .hit { color: #ff6b6b; font-weight: 600; }
+  .ok { color: #8fd18f; }
   button { background: #22252b; color: #e8e8e8; border: 1px solid #3a3e45; border-radius: 6px; padding: 4px 8px; font: inherit; cursor: pointer; }
 </style>
 </head>
@@ -22,9 +24,10 @@
   <label>Explode <input id="explode" type="range" min="0" max="80" value="0"></label>
   <label><input id="showLid" type="checkbox" checked> Lid</label>
   <label><input id="showBase" type="checkbox" checked> Base</label>
-  <label><input id="showGhosts" type="checkbox" checked> Pi, DAC, screen (see-through)</label>
+  <label><input id="showGhosts" type="checkbox" checked> Pi, DAC, screen, ribbon</label>
   <label><input id="xray" type="checkbox"> X-ray the box</label>
   <div style="display:flex; gap:6px"><button id="front">Front</button><button id="back">Back</button><button id="top">Top</button><button id="iso">3/4</button></div>
+  <div id="hits"></div>
   <span id="stamp"></span>
 </div>
 <script type="importmap">
@@ -35,14 +38,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-
-// Parts the watcher exports (tools/enclosure-live.sh), in OpenSCAD's mm, Z up.
-const PARTS = {
-  base:         { color: 0x2f3440, ghost: false },
-  lid_placed:   { color: 0x9aa0aa, ghost: false },
-  ghost_pi:     { color: 0x3b82f6, ghost: true },
-  ghost_screen: { color: 0xf59e0b, ghost: true },
-};
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(devicePixelRatio);
@@ -54,48 +50,72 @@ const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 1, 5000
 camera.up.set(0, 0, 1);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 1.6));
-const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 1.8));
+const sun = new THREE.DirectionalLight(0xffffff, 2.4);
 sun.position.set(150, -200, 300);
 scene.add(sun);
+const fill = new THREE.DirectionalLight(0xffffff, 0.8);
+fill.position.set(-200, 150, 100);
+scene.add(fill);
 const grid = new THREE.GridHelper(400, 40, 0x333842, 0x1c1f24);
 grid.rotation.x = Math.PI / 2;
 scene.add(grid);
 
-const loader = new STLLoader();
-const meshes = {};
+// The build123d model (cad/kdj.py) writes live/parts.json and a GLB per
+// group (coloured), live/report.json, and live/collisions.glb when parts
+// overlap. Z up, mm.
+const gltf = new GLTFLoader();
+const groups = {};   // name -> { obj, printed }
+let collisions = null;
 let center = new THREE.Vector3(), radius = 120, first = true;
 
-function material(part) {
-  const p = PARTS[part];
-  const xray = document.getElementById('xray').checked && !p.ghost;
-  return new THREE.MeshStandardMaterial({
-    color: p.color, roughness: 0.7, metalness: 0.05,
-    transparent: p.ghost || xray, opacity: p.ghost ? 0.45 : xray ? 0.25 : 1,
-    depthWrite: !(p.ghost || xray), side: THREE.DoubleSide,
+function prep(obj, printed) {
+  obj.traverse((o) => {
+    if (!o.isMesh) return;
+    o.userData.base = o.material.clone();
   });
+  obj.userData.printed = printed;
+  // build123d writes glTF in metres, turned Y up; the scene is mm, Z up.
+  obj.rotation.x = Math.PI / 2;
+  obj.scale.setScalar(1000);
+  return obj;
 }
 
 async function load(stamp) {
+  const manifest = await (await fetch(`live/parts.json?${stamp}`, { cache: 'no-store' })).json();
   const box = new THREE.Box3();
-  for (const part of Object.keys(PARTS)) {
-    try {
-      const geo = await loader.loadAsync(`live/${part}.stl?${stamp}`);
-      geo.computeVertexNormals();
-      if (meshes[part]) { scene.remove(meshes[part]); meshes[part].geometry.dispose(); }
-      const m = new THREE.Mesh(geo, material(part));
-      m.userData.part = part;
-      meshes[part] = m;
-      scene.add(m);
-      geo.computeBoundingBox();
-      box.union(geo.boundingBox);
-    } catch (e) { /* not exported (yet) */ }
+  for (const part of manifest) {
+    const g = await gltf.loadAsync(`live/${part.file}?${stamp}`);
+    if (groups[part.name]) scene.remove(groups[part.name].obj);
+    const obj = prep(g.scene, part.printed);
+    groups[part.name] = { obj, printed: part.printed };
+    scene.add(obj);
+    box.expandByObject(obj);
+  }
+  if (collisions) { scene.remove(collisions); collisions = null; }
+  try {
+    const c = await gltf.loadAsync(`live/collisions.glb?${stamp}`);
+    collisions = prep(c.scene, false);
+    collisions.traverse((o) => { if (o.isMesh) o.material = new THREE.MeshBasicMaterial({ color: 0xff2d2d, depthTest: false, transparent: true, opacity: 0.85 }); });
+    collisions.renderOrder = 10;
+    scene.add(collisions);
+  } catch (e) { /* none */ }
+  const report = await (await fetch(`live/report.json?${stamp}`, { cache: 'no-store' })).json();
+  const [w, d, h] = report.size_mm;
+  document.getElementById('size').textContent = `${w} × ${d} × ${h} mm · built in ${report.seconds} s`;
+  const list = document.getElementById('hits');
+  list.innerHTML = '';
+  if (!report.collisions.length) list.innerHTML = '<span class="ok">No collisions</span>';
+  for (const c of report.collisions) {
+    const li = document.createElement('div');
+    li.className = 'hit';
+    li.textContent = c.error ? `${c.a} × ${c.b}: couldn't check` : `${c.a} × ${c.b}: ${c.mm3} mm³`;
+    list.appendChild(li);
   }
   if (!box.isEmpty()) {
     box.getCenter(center);
     const s = box.getSize(new THREE.Vector3());
     radius = Math.max(s.x, s.y, s.z);
-    document.getElementById('size').textContent = `${s.x.toFixed(1)} × ${s.y.toFixed(1)} × ${s.z.toFixed(1)} mm`;
     if (first) { view('iso'); first = false; }
   }
   apply();
@@ -104,10 +124,18 @@ async function load(stamp) {
 
 function apply() {
   const ex = +document.getElementById('explode').value;
-  for (const [part, m] of Object.entries(meshes)) {
-    m.material = material(part);
-    m.position.z = part === 'lid_placed' ? ex : part === 'ghost_screen' ? ex * 0.9 : 0;
-    m.visible = part === 'base' ? showBase.checked : part === 'lid_placed' ? showLid.checked : showGhosts.checked;
+  const xray = document.getElementById('xray').checked;
+  for (const [name, g] of Object.entries(groups)) {
+    const o = g.obj;
+    o.position.set(0, 0, name === 'lid' ? ex : name === 'screen' ? ex * 0.92 : name === 'ribbon' ? ex * 0.3 : 0);
+    o.visible = name === 'base' ? showBase.checked : name === 'lid' ? showLid.checked : showGhosts.checked;
+    o.traverse((m) => {
+      if (!m.isMesh) return;
+      const mat = m.userData.base.clone();
+      if (xray && g.printed) { mat.transparent = true; mat.opacity = 0.18; mat.depthWrite = false; }
+      mat.side = THREE.DoubleSide;
+      m.material = mat;
+    });
   }
 }
 
