@@ -67,18 +67,22 @@ PI_HOLES = [(3.5, 3.5), (61.5, 3.5), (3.5, 52.5), (61.5, 52.5)]
 DSI_ON_PI = (2.5, 28.0)                     # DISPLAY connector, Pi coordinates (approx.)
 STANDOFF_H = 4.0
 
+PAD_T = 0.1                                 # the STEP's copper pads, proud of the board
 # Ports, Pi coordinates: name, edge ("s" = USB-C edge, "e" = USB-A end),
-# centre along that edge, width, height, cut through the wall?
-USB_A = True
+# centre along that edge, width, height, and the hole in the wall (w, h),
+# sized for the plug, not the socket; None for no hole. The Pi sits against
+# the left wall (USB-A plugs are too deep to reach in), so its USB-A and
+# Ethernet jacks all poke into their holes.
 PI_PORTS = [
-    ("USB-C", "s", 11.2, 9.0, 3.3, True),
-    ("HDMI 0", "s", 26.0, 7.5, 3.5, False),
-    ("HDMI 1", "s", 39.5, 7.5, 3.5, False),
-    ("Audio", "s", 53.5, 6.0, 6.0, False),
-    ("USB 3", "e", 9.0, 13.5, 16.0, USB_A),
-    ("USB 2", "e", 27.0, 13.5, 16.0, USB_A),
-    ("Ethernet", "e", 45.75, 16.0, 13.5, False),
+    ("USB-C", "s", 11.2, 9.0, 3.3, (12.5, 7.0)),
+    ("HDMI 0", "s", 26.0, 7.5, 3.5, None),
+    ("HDMI 1", "s", 39.5, 7.5, 3.5, None),
+    ("Audio", "s", 53.5, 6.0, 6.0, None),
+    ("USB 3", "e", 9.0, 13.5, 16.0, (15.5, 18.0)),
+    ("USB 2", "e", 27.0, 13.5, 16.0, (15.5, 18.0)),
+    ("Ethernet", "e", 45.75, 16.0, 13.5, (18.0, 15.5)),
 ]
+BACK_GAP = 2.8                              # Pi's USB-C edge to the back wall: its audio jack sticks out 2.5
 
 # --- The DAC HAT (InnoMaker HiFi DAC) -------------------------------------
 HAT_W, HAT_D, HAT_T = 65.0, 56.5, 1.6
@@ -87,7 +91,7 @@ HAT_GAP = 11.5                              # Pi board top to HAT board bottom
 # diameter, centre height above the HAT board, reach past the edge. MEASURE.
 HAT_JACKS = [("RCA L", 18.0, 8.5, 6.5, 9.0), ("RCA R", 32.0, 8.5, 6.5, 9.0), ("3.5 mm", 48.0, 6.0, 4.0, 3.0)]
 JACK_BODY = (10.0, 12.0, 12.0)
-CUT_JACKS = ("RCA L", "RCA R")
+CUT_JACKS = ("RCA L", "RCA R", "3.5 mm")
 
 # --- The box ---------------------------------------------------------------
 WALL, FLOOR, GAP, LIP, CLEARANCE, PORT_GAP = 2.4, 2.0, 0.4, 2.5, 2.0, 1.0
@@ -98,10 +102,16 @@ BOARD_Z = FLOOR + STANDOFF_H                 # Pi board bottom
 STACK_TOP = BOARD_Z + PI_T + HAT_GAP + HAT_T + JACK_BODY[2]
 BASE_H = STACK_TOP + CLEARANCE + NUT_H       # the screen's back (and nuts) sit on top
 LID_H = SCREEN_T + WALL
-PI_X = WALL + (IN_W - PI_W) / 2
-PI_Y = OUT_D - WALL - PI_D - 1.5             # USB-C edge near the back wall
+PI_X = WALL + 0.4                            # its USB-A end against the left wall
+PI_Y = OUT_D - WALL - PI_D - BACK_GAP        # its USB-C edge near the back wall
 SCREEN_X, SCREEN_Y = (OUT_W - SCREEN_W) / 2, (OUT_D - SCREEN_D) / 2
 SCREEN_Z = BASE_H                            # the back of the screen's board
+# The screen screws down from below into its own threaded nuts, at its corner
+# holes, on posts in the base. Not the back left: the Pi's USB-A jacks are
+# under it, so that corner rests on a ledge instead.
+SCREEN_CORNERS = [(SCREEN_X + SCREEN_W / 2 + sx * CORNER_HOLES[0] / 2, SCREEN_Y + SCREEN_D / 2 + sy * CORNER_HOLES[1] / 2) for sx in (-1, 1) for sy in (-1, 1)]
+POST_TOP = SCREEN_Z - NUT_H
+POST_R, BORE_R, SHELF = 4.5, 3.0, 3.0        # bore from below for the screwdriver; M2.5 x 6 through the shelf
 
 
 def placed(x, y, z=0.0):
@@ -130,7 +140,7 @@ def pi_model():
         export_brep(pi, str(cache))
     # Its file lies on its side: board in XZ, components toward +Y.
     pi = Rot(90, 0, 0) * pi
-    pi = Pos(0, 0, PI_T) * pi
+    pi = Pos(0, 0, PI_T + PAD_T) * pi
     pi = Pos(*placed(0, 0, BOARD_Z)) * Rot(0, 0, 180) * pi
     return tag(pi, "Raspberry Pi 4", "#2e7d32")
 
@@ -195,7 +205,7 @@ def ribbon_model():
     beyond the Pi's edge."""
     w, t = 16.0, 0.15
     px, py, _ = placed(*DSI_ON_PI)
-    leave = BOARD_Z + PI_T + 5.5                       # top of the Pi's connector
+    leave = BOARD_Z + PAD_T + PI_T + 5.8               # top of the Pi's connector
     fold = BOARD_Z + PI_T + 7.0                        # under the HAT (11.5 up)
     fx = SCREEN_X + SCREEN_W - FPC_FROM_RIGHT
     runs = [
@@ -210,16 +220,19 @@ def ribbon_model():
 
 def port_cutouts():
     cuts = []
-    for name, edge, c, w, h, show in PI_PORTS:
-        if not show:
+    for name, edge, c, w, h, hole in PI_PORTS:
+        if hole is None:
             continue
-        z = BOARD_Z + PI_T - PORT_GAP
+        cw, ch = hole
+        z = BOARD_Z + PAD_T + PI_T + h / 2          # centred on the jack
         if edge == "s":
-            x, _, _ = placed(c + w / 2 + PORT_GAP, 0)
-            cuts.append(Pos(x, OUT_D - WALL - 1, z) * Box(w + 2 * PORT_GAP, WALL + 2, h + 2 * PORT_GAP, align=MIN))
+            x, _, _ = placed(c, 0)
+            cuts.append(Pos(x, OUT_D - WALL - 1, z) * Box(cw, WALL + 2, ch, align=(Align.CENTER, Align.MIN, Align.CENTER)))
         else:
-            _, y, _ = placed(0, c + w / 2 + PORT_GAP)
-            cuts.append(Pos(-1, y, z) * Box(WALL + 2, w + 2 * PORT_GAP, h + 2 * PORT_GAP, align=MIN))
+            _, y, _ = placed(0, c)
+            cuts.append(Pos(-1, y, z) * Box(WALL + 2, cw, ch, align=(Align.MIN, Align.CENTER, Align.CENTER)))
+    # A notch over the screen's backlight key, to reach it.
+    cuts.append(Pos(SCREEN_X + 5 + 15.03 - 1, OUT_D - WALL - 1, BASE_H - 5) * Box(8, WALL + 2, 6, align=MIN))
     hz = BOARD_Z + PI_T + HAT_GAP + HAT_T
     for name, jx, d, cz, _ in HAT_JACKS:
         if name in CUT_JACKS:
@@ -237,13 +250,20 @@ def base_model():
         base -= Pos(x, y, -1) * Box(3, PI_D - 24, FLOOR + 2, align=MIN)
     for i in range(8):                              # right wall vents
         base -= Pos(OUT_W - WALL - 1, WALL + 10 + i * 7, FLOOR + 4) * Box(WALL + 2, 3, BASE_H * 0.5, align=MIN)
-    for hx, hy in PI_HOLES:                         # Pi standoffs
+    for hx, hy in PI_HOLES:                         # Pi standoffs: M2.5 up from under the floor
         x, y, _ = placed(hx, hy)
-        base += Pos(x, y, FLOOR) * Cylinder(3, STANDOFF_H, align=CTR_XY) - Pos(x, y, FLOOR) * Cylinder(1.25, STANDOFF_H + 1, align=CTR_XY)
-    for x in (WALL + 4, OUT_W - WALL - 4):          # corner posts for the lid
-        for y in (WALL + 4, OUT_D - WALL - 4):
-            base += Pos(x, y, 0) * Cylinder(3.5, BASE_H, align=CTR_XY) - Pos(x, y, BASE_H - 8) * Cylinder(2.1, 9, align=CTR_XY)
-    return tag(base, "Base (printed)", "#2f3440")
+        base += Pos(x, y, FLOOR) * Cylinder(3, STANDOFF_H, align=CTR_XY)
+        base -= Pos(x, y, -1) * Cylinder(1.4, FLOOR + STANDOFF_H + 2, align=CTR_XY)
+    back_left = min(SCREEN_CORNERS, key=lambda p: p[0] - p[1])
+    for x, y in SCREEN_CORNERS:
+        if (x, y) == back_left:                     # a ledge off the two walls, above the USB-A jacks
+            ledge = Pos(WALL - 0.1, y - POST_R, POST_TOP - 6) * Box(x + POST_R - WALL, OUT_D - WALL - y + POST_R + 0.1, 6, align=MIN)
+            base += ledge
+            continue
+        base += Pos(x, y, 0) * Cylinder(POST_R, POST_TOP, align=CTR_XY)
+        base -= Pos(x, y, -1) * Cylinder(BORE_R, POST_TOP - SHELF + 1, align=CTR_XY)
+        base -= Pos(x, y, -1) * Cylinder(1.4, POST_TOP + 2, align=CTR_XY)
+    return tag(base, "Base (printed)", "#6b7380")
 
 
 def lid_model():
@@ -254,16 +274,23 @@ def lid_model():
     ax = lens_x + LENS_W - VA_RIGHT - VA_W / 2
     ay = lens_y + LENS_D - VA_TOP - VA_D / 2
     lid -= Pos(ax, ay, z + SCREEN_T - 1) * Box(VA_W, VA_D, WALL + 2, align=CTR_XY)
-    for x in (WALL + 4, OUT_W - WALL - 4):
-        for y in (WALL + 4, OUT_D - WALL - 4):
-            lid -= Pos(x, y, z - 1) * Cylinder(1.7, LID_H + 2, align=CTR_XY)
-    return tag(lid, "Lid (printed)", "#9aa0aa")
+    return tag(lid, "Lid (printed)", "#b9bfc8")
 
 
 # --- Run ---------------------------------------------------------------------
 
 def solids_of(shape):
     return list(shape.solids()) if hasattr(shape, "solids") else [shape]
+
+
+# Parts that go into each other by design: the Pi's header pins into the DAC's socket.
+MATES = [{"Raspberry Pi 4", "DAC socket"}]
+
+
+def boxes_meet(a, b):
+    """Bounding boxes share some volume. (BoundBox.overlaps is False when one
+    holds the other, which is every part inside the base.)"""
+    return all(lo1 < hi2 and lo2 < hi1 for lo1, hi1, lo2, hi2 in zip(a.min, a.max, b.min, b.max))
 
 
 def main():
@@ -293,7 +320,7 @@ def main():
     hits, overlaps = [], []
     bbs = [(g, s, s.bounding_box()) for g, s in pieces]
     for (ga, a, ba), (gb, b, bb) in combinations(bbs, 2):
-        if ga == gb or not ba.overlaps(bb, tolerance=0.0):
+        if ga == gb or {a.label, b.label} in MATES or not boxes_meet(ba, bb):
             continue
         try:
             common = a.intersect(b)
