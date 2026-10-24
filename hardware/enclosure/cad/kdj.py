@@ -20,6 +20,7 @@ import json
 import math
 import os
 import time
+import uuid
 from itertools import combinations
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from build123d import (
     Color,
     Compound,
     Cylinder,
+    Plane,
     Pos,
     Rot,
     Shape,
@@ -36,8 +38,10 @@ from build123d import (
     export_gltf,
     export_step,
     export_stl,
+    extrude,
     import_brep,
     import_step,
+    Text,
 )
 
 HERE = Path(__file__).resolve().parent.parent
@@ -146,6 +150,19 @@ BOSS_H = 2.0                                 # floor bosses for the rails' M3 x 
 RAIL_SCREWS = [(x, (SPINE_Y + OUT_D - 0.5) / 2) for x0 in (SETS_X[0], SETS_X[1] - SET_W) for x in (x0 + 5.5, x0 + SET_W - 5.5)]
 TILT = float(os.environ.get("TILT", 30))     # shown on this leg (0: flat, all folded)
 
+# --- Labels --------------------------------------------------------------------
+# Debossed into the outside faces. On their own they read in raking light;
+# filled (a second filament, or paint wiped into them) they read at a glance.
+# Light on dark, words and not colours, for anyone colourblind.
+FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+DEBOSS = 0.6
+JACK_NAMES = {"RCA L": "L", "RCA R": "R", "3.5 mm": "LINE"}
+REVISION = "kdj  rev A"
+# Each face a label can sit on: (the text's x, the face's outward normal), so
+# it reads the right way round from outside.
+FACES = {"back": ((-1, 0, 0), (0, 1, 0)), "front": ((1, 0, 0), (0, -1, 0)),
+         "left": ((0, -1, 0), (-1, 0, 0)), "bottom": ((-1, 0, 0), (0, 0, -1))}
+
 
 def placed(x, y, z=0.0):
     """A point in the Pi's coordinates, in the box's: the Pi lies turned
@@ -184,6 +201,14 @@ def leg_length(angle):
 
 def about_axis(deg):
     return Pos(0, AXIS_Y, AXIS_Z) * Rot(deg, 0, 0) * Pos(0, -AXIS_Y, -AXIS_Z)
+
+
+def label_solid(text, size, face, at, depth=DEBOSS):
+    """Letters size mm tall, centred at a point on a face and reaching depth
+    into it: cut from the part for the deboss, or kept as the fill."""
+    x_dir, normal = FACES[face]
+    letters = Pos(0, 0, -depth) * extrude(Text(text, font_size=size, font_path=FONT, align=(Align.CENTER, Align.CENTER)), amount=depth)
+    return Plane(origin=at, x_dir=x_dir, z_dir=normal).location * letters
 
 
 def tag(shape, label, color):
@@ -316,7 +341,36 @@ def port_cutouts():
     return cuts
 
 
-def base_model():
+def base_labels():
+    """Port names beside their holes, the name on the front, a revision
+    underneath. Positions follow the ports, so they move with them."""
+    hz = BOARD_Z + PI_T + HAT_GAP + HAT_T
+    jacks_bottom = min(hz + cz - JACK_HOLES.get(n, d + 2 * PORT_GAP) / 2 for n, _, d, cz, _ in HAT_JACKS if n in CUT_JACKS)
+    ports = {p[0]: p for p in PI_PORTS}
+    def hole_z(name):                              # centre, bottom, top of a port's hole
+        _, _, _, _, h, (_, ch) = ports[name]
+        z = BOARD_Z + PAD_T + PI_T + h / 2
+        return z, z - ch / 2, z + ch / 2
+    usbc_z, usbc_bottom, usbc_top = hole_z("USB-C")
+    out = [(JACK_NAMES[n], 4.0, "back", (placed(jx, 0)[0], OUT_D, (usbc_top + jacks_bottom) / 2))
+           for n, jx, *_ in HAT_JACKS if n in CUT_JACKS]
+    out.append(("5V", 3.0, "back", (placed(ports["USB-C"][2], 0)[0], OUT_D, usbc_bottom / 2)))
+    side_z = max(hole_z(n)[2] for n in ("USB 3", "USB 2", "Ethernet")) + 4
+    usb_y = (placed(0, ports["USB 3"][2])[1] + placed(0, ports["USB 2"][2])[1]) / 2
+    out.append(("USB", 4.0, "left", (0, usb_y, side_z)))
+    out.append(("LAN", 4.0, "left", (0, placed(0, ports["Ethernet"][2])[1], side_z)))
+    out.append(("kdj", 10.0, "front", (OUT_W / 2, 0, TOP_Z / 2)))
+    return [label_solid(t, size, face, at, depth=0.4 if face == "bottom" else DEBOSS) for t, size, face, at in out] + \
+        [label_solid(REVISION, 4.0, "bottom", (OUT_W / 2, FRONT_FEET[0][1] + 3, 0), depth=0.4)]
+
+
+def leg_label(i, angle):
+    """Its angle, on the underside of its foot: readable with the legs folded."""
+    (l0, _), (_, r1) = arm_x(i)
+    return label_solid(str(angle), 5.0, "bottom", ((l0 + r1) / 2, AXIS_Y - leg_length(angle) + FOOT_W / 2, AXIS_Z - LEG_T / 2), depth=0.5)
+
+
+def base_model(lettered=True):
     """Printed floor-down with no support: nothing hangs below the floor, and
     nothing inside overhangs past 45 degrees."""
     base = Box(OUT_W, OUT_D, TOP_Z, align=MIN) - Pos(WALL, WALL, FLOOR) * Box(IN_W, IN_D, TOP_Z, align=MIN)
@@ -351,6 +405,8 @@ def base_model():
         base -= Pos(x, y, -1) * Cylinder(2.0, FLOOR + BOSS_H + 1 - 0.6, align=CTR_XY)
     for x, y in FRONT_FEET:                         # shallow recesses to locate the front feet
         base -= Pos(x, y, -1) * Cylinder(FOOT_R + 0.2, 1.6, align=CTR_XY)
+    for letters in base_labels() if lettered else []:
+        base -= letters
     return tag(base, "Base (printed)", "#6b7380")
 
 
@@ -400,6 +456,7 @@ def leg_model(i, angle, open_):
         leg += Pos(a0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(LEG_T / 2, ARM_W, align=(Align.CENTER, Align.CENTER, Align.MIN))
         leg += tooth(angle, a0)
     leg -= Pos(0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(1.6, 3 * OUT_W)
+    leg -= leg_label(i, angle)
     if open_:
         leg = about_axis(opening(angle)) * leg
     return tag(leg, f"Leg {angle}°", ["#3b6fb6", "#d08a2e", "#5a9a4a"][i])
@@ -410,7 +467,7 @@ def leg_model(i, angle, open_):
 def atomic(path, write):
     """Write to a temporary name, then rename into place, so the viewer (or a
     second build racing this one) never reads half a file."""
-    tmp = path.with_name(f"{path.stem}.tmp{os.getpid()}{path.suffix}")
+    tmp = path.with_name(f"{path.stem}.tmp{uuid.uuid4().hex}{path.suffix}")   # every container's pid is 1
     write(str(tmp))
     os.replace(tmp, path)
 
@@ -444,6 +501,10 @@ def main():
         "dac": dac_model(),
         "screen": screen_model(),
         "ribbon": ribbon_model(),
+        # The letters' fill, as a second filament or paint would leave it.
+        "labels": [tag(Compound(base_labels()), "Label fill", "#f4f5f7")] +
+                  [tag(about_axis(opening(a)) * leg_label(i, a) if a == TILT else leg_label(i, a), "Label fill", "#f4f5f7")
+                   for i, a in enumerate(LEGS)],
     }
     # Shown resting on the desk at TILT, on its front feet and that leg.
     pivot_y = FRONT_FEET[0][1] - FOOT_R
@@ -459,13 +520,22 @@ def main():
     for side, rail in zip(("left", "right"), groups["rails"]):
         atomic(OUT / f"rail-{side}.stl", lambda f: export_stl(Rot(180, 0, 0) * rail, f))
     atomic(OUT / "foot.stl", lambda f: export_stl(Pos(0, 0, FEET_H - PAD_T) * groups["feet"][0], f))
+    # The fills, for a second filament: load with the part they belong to, as
+    # a part of the same object, and give them the other filament.
+    atomic(OUT / "base-labels.stl", lambda f: export_stl(groups["labels"][0], f))
+    for i, angle in enumerate(LEGS):
+        atomic(OUT / f"leg-{angle}-label.stl", lambda f: export_stl(Pos(0, 0, LEG_T / 2 - AXIS_Z) * leg_label(i, angle), f))
     for i, angle in enumerate(LEGS):
         atomic(OUT / f"leg-{angle}.stl", lambda f: export_stl(Pos(0, 0, LEG_T / 2 - AXIS_Z) * leg_model(i, angle, False), f))
     atomic(OUT / "enclosure.step", lambda f: export_step(Compound(children=[s for g in PRINTED for s in groups[g]]), f))
 
     # Collisions: every pair of parts from different groups (a group's own
     # pieces touch by design), by volume of overlap.
-    pieces = [(g, s) for g, shapes in groups.items() for s in shapes]
+    # The lettering is 0.6 mm into 2.4 mm outer walls, so it can't touch
+    # anything inside: check an unlettered base, which is far quicker. The
+    # fills sit in their own cuts.
+    checked = dict(groups, base=[base_model(lettered=False)])
+    pieces = [(g, s) for g, shapes in checked.items() if g != "labels" for s in shapes]
     hits, overlaps = [], []
     bbs = [(g, s, s.bounding_box()) for g, s in pieces]
     for (ga, a, ba), (gb, b, bb) in combinations(bbs, 2):
