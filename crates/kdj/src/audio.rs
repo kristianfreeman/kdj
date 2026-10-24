@@ -53,7 +53,8 @@ pub struct Output {
 }
 
 pub struct Audio {
-    _stream: cpal::Stream,
+    /// None when silent (no sound card): see `silent`.
+    _stream: Option<cpal::Stream>,
     pub stats: rtrb::Consumer<CallbackStat>,
     /// Stream errors (xruns and the like), counted for the UI thread to report.
     pub errors: Arc<AtomicU64>,
@@ -118,7 +119,7 @@ impl Output {
             f => return Err(anyhow!("unsupported sample format {f}")),
         }?;
         stream.play()?;
-        Ok(Audio { _stream: stream, stats: rx, errors, lost, rt })
+        Ok(Audio { _stream: Some(stream), stats: rx, errors, lost, rt })
     }
 
     fn build<T: SizedSample + FromSample<f32>>(
@@ -235,6 +236,42 @@ fn guarded(f: impl FnOnce()) {
     assert_no_alloc::assert_no_alloc(f);
     #[cfg(not(debug_assertions))]
     f();
+}
+
+/// No sound card: run the decks anyway, in real time on a thread of their
+/// own, and throw the sound away. The screen, the playhead and the controls
+/// all work, and the deck can say what's missing instead of going dark.
+pub fn silent(mut engines: Vec<Engine>, mut hook: Option<Box<dyn BlockHook>>, sample_rate: u32) -> Audio {
+    const BLOCK: usize = 256;
+    const BLOCK_FRAMES: u32 = 256;
+    let (mut tx, rx) = rtrb::RingBuffer::new(4096);
+    let (errors, lost, rt) =
+        (Arc::new(AtomicU64::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicI32::new(0)));
+    let _ = std::thread::Builder::new().name("audio-silent".into()).spawn(move || {
+        let mut buf = vec![0.0f32; BLOCK * 2];
+        #[expect(clippy::cast_precision_loss, reason = "a block of 256 frames")]
+        let period = std::time::Duration::from_secs_f64(BLOCK as f64 / f64::from(sample_rate.max(1)));
+        let mut next = Instant::now();
+        loop {
+            if let Some(h) = hook.as_mut() {
+                h.before(&mut engines, 0);
+            }
+            for engine in &mut engines {
+                engine.process(&mut buf);
+            }
+            if let Some(h) = hook.as_mut() {
+                h.after(BLOCK as u64);
+            }
+            let _ = tx.push(CallbackStat { ns: 0, frames: BLOCK_FRAMES });
+            next += period;
+            match next.checked_duration_since(Instant::now()) {
+                Some(rest) => std::thread::sleep(rest),
+                // Fell behind (a stall): carry on from now, don't race to catch up.
+                None => next = Instant::now(),
+            }
+        }
+    });
+    Audio { _stream: None, stats: rx, errors, lost, rt }
 }
 
 /// Whether the sound card takes samples as fast as it says it does. A DAC

@@ -335,6 +335,9 @@ impl Remotes {
     }
 }
 
+/// What the deck says while it has no sound card to play on.
+const NO_SOUND_CARD: &str = "No sound card: is the DAC hat on? Playing silently";
+
 /// How long a power off / restart press waits for its confirming second press.
 const POWER_CONFIRM: Duration = Duration::from_secs(3);
 
@@ -797,18 +800,25 @@ fn run() -> Result<()> {
     print_keys(&keymap);
 
     // Audio first: the device decides the sample rate everything runs at.
-    let output = audio::Output::open(args.buffer, args.device.as_deref())?;
-    let sample_rate = output.sample_rate();
+    let (output, sample_rate, output_name) = open_output(&args);
 
     let (engines, handles, midi_inputs) = engines(args.decks, sample_rate);
-    eprintln!("audio: {} at {} Hz, asked for {} frames, {} deck(s)", output.name, sample_rate, args.buffer, args.decks);
-    let info = system_info(&args, &output.name, sample_rate);
-    let mut audio = output.start(engines, Some(sync_hook(&args, sample_rate)))?;
+    eprintln!("audio: {output_name} at {sample_rate} Hz, asked for {} frames, {} deck(s)", args.buffer, args.decks);
+    let info = system_info(&args, &output_name, sample_rate);
+    let hook = Some(sync_hook(&args, sample_rate));
+    let silent = output.is_none();
+    let mut audio = match output {
+        Some(o) => o.start(engines, hook)?,
+        None => audio::silent(engines, hook, sample_rate),
+    };
 
     let (load_tx, load_rx) = mpsc::channel::<Loaded>();
     let (scan_tx, scan_rx) = mpsc::channel();
     scan_in_background(scan_tx.clone());
-    let status = start_loading(&args, sample_rate, &load_tx);
+    let mut status = start_loading(&args, sample_rate, &load_tx);
+    if silent {
+        NO_SOUND_CARD.clone_into(&mut status);
+    }
 
     let screen = Screen::open(&args)?;
     let slots = screen.slots(handles)?;
@@ -827,6 +837,7 @@ fn run() -> Result<()> {
         logged: Instant::now(),
         rt_logged: false,
         clock: audio::ClockCheck::default(),
+        looked: Instant::now(),
     };
     // Without vsync, pace the loop to about 60 fps instead of spinning a core.
     let pace = (!screen.vsync).then(|| Duration::from_micros(16_667));
@@ -854,17 +865,11 @@ fn run() -> Result<()> {
             app.take_loaded(loaded);
         }
         frames.loaded |= app.settle_loads();
-        while let Ok(s) = audio.stats.pop() {
-            app.hud.callback(s, sample_rate);
-            if let Some(ratio) = audio_watch.clock.add(s.frames, Instant::now(), sample_rate) {
-                let msg = format!(
-                    "The sound card runs {ratio:.2}× too fast: everything plays at the wrong speed (the DAC's clock setting)"
-                );
-                eprintln!("audio: {msg}");
-                app.status = msg;
-            }
-        }
+        audio_watch.take_stats(&mut app, &mut audio, sample_rate);
         audio_watch.check(&mut app, &audio);
+        if silent && audio_watch.sound_card_arrived(&args, &mut app) {
+            return Ok(());
+        }
         frames.render(&mut app, &screen.window, &audio.errors);
         if let Some(leds) = midi.as_mut().and_then(|m| m.leds.as_mut()) {
             leds.update(&frames.snaps, app.focus);
@@ -873,6 +878,18 @@ fn run() -> Result<()> {
             std::thread::sleep(rest);
         }
     }
+}
+
+/// The sound card, the rate everything runs at, and its name. None at all
+/// (the DAC hat off, say): the decks run silent at 48 kHz, and the screen
+/// says so, rather than the deck failing over and over, unseen.
+fn open_output(args: &Args) -> (Option<audio::Output>, u32, String) {
+    let output = audio::Output::open(args.buffer, args.device.as_deref())
+        .map_err(|e| eprintln!("audio: no sound card ({e:#}): the decks run silent until there is one"))
+        .ok();
+    let rate = output.as_ref().map_or(48_000, audio::Output::sample_rate);
+    let name = output.as_ref().map_or_else(|| NO_SOUND_CARD.to_owned(), |o| o.name.clone());
+    (output, rate, name)
 }
 
 /// Start the controller thread if there's a mapping file, and give the
@@ -951,10 +968,44 @@ struct AudioWatch {
     rt_logged: bool,
     /// Whether the sound card keeps time.
     clock: audio::ClockCheck,
+    /// Playing silent (no sound card): when it was last looked for.
+    looked: Instant,
 }
 
 impl AudioWatch {
     const LOST: &str = "Audio device lost";
+
+    /// What the audio side counted: for the HUD, and the clock check.
+    fn take_stats(&mut self, app: &mut App, audio: &mut audio::Audio, sample_rate: u32) {
+        while let Ok(s) = audio.stats.pop() {
+            app.hud.callback(s, sample_rate);
+            if let Some(ratio) = self.clock.add(s.frames, Instant::now(), sample_rate) {
+                let msg = format!(
+                    "The sound card runs {ratio:.2}× too fast: everything plays at the wrong speed (the DAC's clock setting)"
+                );
+                eprintln!("audio: {msg}");
+                app.status = msg;
+            }
+        }
+    }
+
+    /// Playing silent: look for a sound card now and then. True once there
+    /// is one, to start again with it (on the Pi, systemd starts the deck
+    /// again straight away); until then keep saying why it's silent.
+    fn sound_card_arrived(&mut self, args: &Args, app: &mut App) -> bool {
+        if self.looked.elapsed() < Duration::from_secs(3) {
+            return false;
+        }
+        self.looked = Instant::now();
+        if audio::Output::open(args.buffer, args.device.as_deref()).is_ok() {
+            eprintln!("audio: a sound card is here now: starting again to use it");
+            return true;
+        }
+        if app.status.is_empty() {
+            NO_SOUND_CARD.clone_into(&mut app.status);
+        }
+        false
+    }
 
     /// Log new stream errors (at most once a second), and keep a lost device
     /// on screen: the deck has gone quiet and won't come back by itself.
