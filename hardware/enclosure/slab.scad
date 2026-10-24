@@ -22,22 +22,48 @@ screen_holes = [[-56, -34], [56, -34], [-56, 34], [56, 34]]; // from centre: MEA
 screen_hole_d = 2.7;
 
 // --- The Pi 4 and the DAC on it --------------------------------------
-pi_w = 85;               // along the back wall
+// In the Pi's own coordinates (its mechanical drawing): x along the long
+// edge from the USB-C end, y up from the USB-C / HDMI edge, z up from the
+// board's top. The Pi is turned 180 degrees in the box, so that edge faces
+// the back wall and its USB-A / Ethernet end the left wall.
+pi_w = 85;
 pi_d = 56;
+pi_t = 1.6;
 pi_holes = [[3.5, 3.5], [61.5, 3.5], [3.5, 52.5], [61.5, 52.5]];
 standoff_h = 4;
-stack_h = 32;            // Pi board to the top of the DAC's jacks: MEASURE
-clearance = 2;           // DAC top to the screen's back
 
-// The Pi lies with its USB-C / HDMI edge against the back wall. Cutouts in
-// the back wall: [x from the Pi's left edge, z above its board, w, h].
-back_ports = [
-    [ 3.5, -1, 11, 6],   // USB-C power
-    [30, 14, 26, 13],    // DAC: RCA pair: MEASURE where they sit
+// Ports: [name, edge ("s" = the USB-C edge, "e" = the USB-A end), position
+// along that edge (centre), width, height, height of its bottom above the
+// board, sticks out past the edge by, shape ("box" | "round"), show it
+// through the wall?]
+usb_a = true;            // the K3 and USB sticks plug in here
+pi_ports = [
+    ["USB-C",   "s", 11.2, 9.0,  3.3, 0,   1.2, "box",   true],
+    ["HDMI 0",  "s", 26.0, 7.5,  3.5, 0,   1.2, "box",   false],
+    ["HDMI 1",  "s", 39.5, 7.5,  3.5, 0,   1.2, "box",   false],
+    ["Audio",   "s", 53.5, 6.0,  6.0, 0,   2.5, "round", false],
+    ["USB 3",   "e",  9.0, 13.5, 16,  0,   2.2, "box",   usb_a],
+    ["USB 2",   "e", 27.0, 13.5, 16,  0,   2.2, "box",   usb_a],
+    ["Ethernet","e", 45.75,16.0, 13.5,0,   2.2, "box",   false],
 ];
-// The Pi's USB-A / Ethernet end faces the right wall.
-usb_a = true;
-usb_a_port = [2, 0, 34, 17];   // [y from the Pi's back edge, z, w, h]: both USB-A stacks
+
+// The InnoMaker HiFi DAC HAT, on the Pi's header: a 65 x 56.5 board. Where
+// its jacks sit is a guess from similar PCM5122 hats: MEASURE yours.
+hat_gap = 11.5;          // Pi board top to the HAT board's bottom
+hat_w = 65;
+hat_d = 56.5;
+// [name, position along the USB-C edge (centre), diameter, height of its
+// centre above the HAT board, sticks out past the edge by, show it?]
+hat_jacks = [
+    ["RCA L", 18, 8.5, 6.5, 9, true],
+    ["RCA R", 32, 8.5, 6.5, 9, true],
+    ["3.5 mm", 48, 6.0, 4.0, 3, false],
+];
+jack_body = [10, 12, 12];   // each jack's housing on the board: w, d, h
+stack_h = hat_gap + 1.6 + jack_body.z;   // Pi board top to the top of the jacks
+clearance = 2;           // jacks to the screen's back
+
+port_gap = 1;            // around each cutout
 
 // --- The box ---------------------------------------------------------
 wall = 2.4;
@@ -59,7 +85,26 @@ base_h = board_z + 1.6 + stack_h + clearance;   // up to the screen's back
 lid_h = screen_t + wall;
 
 pi_x = wall + (in_w - pi_w) / 2;
-pi_y = out_d - wall - pi_d - 1;                 // its back edge near the back wall
+pi_y = out_d - wall - pi_d - 1.5;               // its USB-C edge near the back wall
+
+// A point in the Pi's coordinates, in the box's (turned 180 degrees).
+function placed(x, y, z) = [pi_x + pi_w - x, pi_y + pi_d - y, z];
+
+// The holes in the walls for every port shown: the back wall for the Pi's
+// USB-C edge and the HAT's jacks, the left wall for its USB-A end.
+module port_cutouts() {
+    for (p = pi_ports) if (p[8]) {
+        z = board_z + pi_t + p[5] - port_gap;
+        h = p[4] + 2 * port_gap;
+        if (p[1] == "s") translate([pi_x + pi_w - p[2] - p[3] / 2 - port_gap, out_d - wall - 1, z])
+            cube([p[3] + 2 * port_gap, wall + 2, h]);
+        else translate([-1, pi_y + pi_d - p[2] - p[3] / 2 - port_gap, z])
+            cube([wall + 2, p[3] + 2 * port_gap, h]);
+    }
+    for (j = hat_jacks) if (j[5])
+        translate([pi_x + pi_w - j[1], out_d - wall - 1, board_z + pi_t + hat_gap + 1.6 + j[3]])
+            rotate([-90, 0, 0]) cylinder(d = j[2] + 2 * port_gap, h = wall + 2);
+}
 
 module rbox(w, d, h, rr = r) {
     hull() for (x = [rr, w - rr], y = [rr, d - rr]) translate([x, y, 0]) cylinder(r = rr, h = h);
@@ -74,15 +119,13 @@ module base() {
     difference() {
         rbox(out_w, out_d, base_h);
         translate([wall, wall, floor_t]) rbox(in_w, in_d, base_h, r - 1);
-        for (p = back_ports) translate([pi_x + p[0], out_d - wall - 1, board_z + 1.6 + p[1]]) cube([p[2], wall + 2, p[3]]);
-        if (usb_a) translate([out_w - wall - 1, pi_y + pi_d - usb_a_port[0] - usb_a_port[2], board_z + 1.6 + usb_a_port[1]])
-            cube([wall + 2, usb_a_port[2], usb_a_port[3]]);
-        // Vents: slots in the floor under the Pi, and low on the left wall.
-        for (i = [0 : vent_slots - 1]) translate([pi_x + 10 + i * 8, pi_y + 12, -1]) cube([3, pi_d - 24, floor_t + 2]);
-        for (i = [0 : vent_slots - 1]) translate([-1, wall + 10 + i * 7, floor_t + 4]) cube([wall + 2, 3, base_h * 0.5]);
+        port_cutouts();
+        // Vents: slots in the floor under the Pi, and low on the right wall.
+        for (i = [0 : vent_slots - 1]) translate([pi_x + 12 + i * 8, pi_y + 12, -1]) cube([3, pi_d - 24, floor_t + 2]);
+        for (i = [0 : vent_slots - 1]) translate([out_w - wall - 1, wall + 10 + i * 7, floor_t + 4]) cube([wall + 2, 3, base_h * 0.5]);
     }
-    translate([pi_x, pi_y, floor_t]) for (h = pi_holes)
-        translate([h[0], h[1], 0]) difference() { cylinder(d = 6, h = standoff_h); cylinder(d = 2.5, h = standoff_h + 1); }
+    for (h = pi_holes) translate(placed(h[0], h[1], floor_t))
+        difference() { cylinder(d = 6, h = standoff_h); cylinder(d = 2.5, h = standoff_h + 1); }
     posts() difference() { cylinder(d = 7, h = base_h); translate([0, 0, base_h - 8]) cylinder(d = insert_d, h = 9); }
 }
 
@@ -113,16 +156,36 @@ module test_plate() {
     }
 }
 
-// Stand-ins for what goes inside, to see the fit (not printed): the Pi's
-// board, the DAC on it, its RCA jacks, and the screen under the lid.
-module ghost_pi() {
-    translate([pi_x, pi_y, board_z]) {
-        cube([pi_w, pi_d, 1.6]);                                        // Pi 4 board
-        translate([0, 0, 1.6 + 11]) cube([65, 56.5, 1.6]);              // DAC HAT board
-        for (p = back_ports) if (p[1] > 0)                              // RCA jacks
-            translate([p[0], pi_d - 12, 1.6 + p[1]]) cube([p[2], 13, p[3]]);
-        translate([pi_w - 21, 2, 1.6]) cube([21, 53, 16]);              // USB-A / Ethernet
+// Stand-ins for what goes inside, to see the fit (not printed): the Pi 4
+// with its ports and header, the DAC HAT with its jacks.
+module pi_local() {
+    difference() {
+        cube([pi_w, pi_d, pi_t]);
+        for (h = pi_holes) translate([h[0], h[1], -1]) cylinder(d = 2.7, h = 4);
     }
+    for (p = pi_ports) {
+        out = p[6];
+        if (p[1] == "s") translate([p[2] - p[3] / 2, -out, pi_t + p[5]])
+            if (p[7] == "round") translate([p[3] / 2, 0, p[4] / 2]) rotate([-90, 0, 0]) cylinder(d = p[3], h = 12);
+            else cube([p[3], (p[0] == "USB-C" ? 7.5 : 7.5) + out, p[4]]);
+        else translate([pi_w - 17.5 + out, p[2] - p[3] / 2, pi_t + p[5]]) cube([17.5, p[3], p[4]]);
+    }
+    translate([7.1, pi_d - 3.5 - 2.5, pi_t]) cube([50.8, 5, 8.5]);            // the 40-pin header
+    translate([22, 25, pi_t]) cube([15, 15, 2.4]);                              // the SoC
+    // The HAT, on the header.
+    translate([0, pi_d - hat_d, pi_t + hat_gap]) {
+        cube([hat_w, hat_d, 1.6]);
+        translate([7.1, hat_d - 6, -hat_gap + 8.5]) cube([50.8, 5, hat_gap - 8.5]);   // its socket
+        translate([25, 25, 1.6]) cube([8, 8, 1.2]);                                     // the DAC chip
+    }
+    for (j = hat_jacks) {
+        hz = pi_t + hat_gap + 1.6;
+        translate([j[1] - jack_body.x / 2, pi_d - hat_d, hz]) cube([jack_body.x, jack_body.y, jack_body.z]);
+        translate([j[1], pi_d - hat_d, hz + j[3]]) rotate([90, 0, 0]) cylinder(d = j[2], h = j[4]);
+    }
+}
+module ghost_pi() {
+    translate([pi_x + pi_w, pi_y + pi_d, board_z]) rotate([0, 0, 180]) pi_local();
 }
 module ghost_screen() {
     translate([out_w / 2 - screen_w / 2, out_d / 2 - screen_h / 2, base_h]) cube([screen_w, screen_h, screen_t]);
