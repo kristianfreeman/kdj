@@ -27,13 +27,17 @@ from pathlib import Path
 from build123d import (
     Align,
     Box,
+    Circle,
     Color,
     Compound,
     Cylinder,
     Plane,
     Pos,
+    RectangleRounded,
     Rot,
     Shape,
+    Shell,
+    Solid,
     export_brep,
     export_gltf,
     export_step,
@@ -76,21 +80,24 @@ SOC_ON_PI, SOC_H = (29.23, 32.63), 2.3         # the processor, from the STEP: 1
 HEATSINK = (14.0, 14.0, 6.0)                 # a stick-on aluminium one; clears the HAT by ~3 mm
 
 PAD_T = 0.1                                 # the STEP's copper pads, proud of the board
-# Ports, Pi coordinates: name, edge ("s" = USB-C edge, "e" = USB-A end),
-# centre along that edge, width, height, and the hole in the wall (w, h),
-# sized for the plug, not the socket; None for no hole. The Pi sits against
-# the left wall (USB-A plugs are too deep to reach in), its jacks 0.2 mm short
-# of it so it lowers straight in, and the plugs reach in through the holes.
+# Ports that reach the I/O plates, measured from the STEP, in Pi coordinates:
+# name, edge ("s" = USB-C edge, "e" = USB-A end), extent along that edge,
+# extent in z above the board's bottom, how far it reaches past the edge,
+# shape ("relief": no hole, a recess inside the plate so it stays covered),
+# and a pocket (w, h) round the hole on the outside where a plug's moulded
+# grip has to reach in, or None. Measured from every face, solid or not.
 PI_PORTS = [
-    ("USB-C", "s", 11.2, 9.0, 3.3, (12.5, 7.0)),
-    ("HDMI 0", "s", 26.0, 7.5, 3.5, None),
-    ("HDMI 1", "s", 39.5, 7.5, 3.5, None),
-    ("Audio", "s", 53.5, 6.0, 6.0, None),
-    ("USB 3", "e", 9.0, 13.5, 16.0, (16.5, 18.0)),
-    ("USB 2", "e", 27.0, 13.5, 16.0, (16.5, 18.0)),
-    ("Ethernet", "e", 45.75, 16.0, 13.5, (18.0, 15.5)),
+    ("USB-C", "s", (6.73, 15.67), (1.80, 5.76), 1.20, "rect", (12.5, 7.0)),
+    ("HDMI 0", "s", (22.75, 29.25), (2.18, 5.44), 1.20, "relief", None),
+    ("HDMI 1", "s", (36.25, 42.75), (2.18, 5.44), 1.20, "relief", None),
+    ("Audio", "s", (51.0, 57.0), (2.60, 8.60), 2.50, "round", None),
+    ("USB 3", "e", (1.55, 16.45), (1.09, 18.21), 3.36, "rect", None),
+    ("USB 2", "e", (19.50, 34.50), (3.29, 18.94), 2.85, "rect", None),
+    ("Ethernet", "e", (37.80, 53.70), (0.70, 16.25), 3.25, "rect", None),
 ]
-BACK_GAP = 2.8                              # Pi's USB-C edge to the back wall: its audio jack sticks out 2.5
+OVERHANG_S, OVERHANG_E = 2.50, 3.36          # furthest past each edge: the audio jack, USB 3's flange
+FACE_INSET = 0.3                             # connector faces this far inside the outside surface
+HOLE_GAP = 0.3                               # round each connector in its plate
 
 # --- The DAC HAT (InnoMaker HiFi DAC) -------------------------------------
 HAT_W, HAT_D, HAT_T = 65.0, 56.5, 1.6
@@ -100,11 +107,6 @@ HAT_GAP = 11.5                              # Pi board top to HAT board bottom
 HAT_JACKS = [("RCA L", 18.0, 8.5, 6.5, 9.0), ("RCA R", 32.0, 8.5, 6.5, 9.0), ("3.5 mm", 48.0, 6.0, 4.0, 3.0)]
 JACK_BODY = (10.0, 12.0, 12.0)
 CUT_JACKS = ("RCA L", "RCA R", "3.5 mm")
-JACK_HOLES = {"3.5 mm": 9.0}               # plug-sized where the plug reaches into the wall
-# The DAC goes on last: tilted to feed its barrels out through the back wall
-# from inside, then pressed down onto the header, so its jack holes are slots
-# this much taller.
-HEADER_PUSH = 7.5
 
 # --- The box ---------------------------------------------------------------
 WALL, FLOOR, GAP, LIP, CLEARANCE, PORT_GAP = 2.4, 2.0, 0.6, 2.5, 2.0, 1.0
@@ -114,8 +116,8 @@ OUT_W, OUT_D = IN_W + 2 * WALL, IN_D + 2 * WALL
 BOARD_Z = FLOOR + STANDOFF_H                 # Pi board bottom
 STACK_TOP = BOARD_Z + PI_T + HAT_GAP + HAT_T + JACK_BODY[2]
 BASE_H = STACK_TOP + CLEARANCE + NUT_H       # the screen's back (and nuts) sit on top
-PI_X = WALL + 0.2 + 2.2                      # its USB-A jacks (2.2 past the board) just short of the left wall
-PI_Y = OUT_D - WALL - PI_D - BACK_GAP        # its USB-C edge near the back wall
+PI_X = FACE_INSET + OVERHANG_E               # its USB end's jacks just inside the left face
+PI_Y = OUT_D - FACE_INSET - OVERHANG_S - PI_D   # its USB-C edge's jacks just inside the back face
 SCREEN_X, SCREEN_Y = (OUT_W - SCREEN_W) / 2, (OUT_D - SCREEN_D) / 2
 SCREEN_Z = BASE_H                            # the back of the screen's board
 # The screen screws down from below into its own threaded nuts, at its corner
@@ -125,6 +127,17 @@ SCREEN_CORNERS = [(SCREEN_X + SCREEN_W / 2 + sx * CORNER_HOLES[0] / 2, SCREEN_Y 
 POST_TOP = SCREEN_Z - NUT_H
 POST_R, BORE_R, SHELF = 4.5, 3.0, 3.0        # bore from below for the screwdriver; M2.5 x 6 through the shelf
 TOP_Z = SCREEN_Z + SCREEN_T                  # no lid: the walls rise to the glass, which sits flush
+
+# --- I/O plates ----------------------------------------------------------------
+# The back wall, and the left wall where its ports are, are separate plates
+# with holes cut close round each connector. Pushed onto the connectors
+# first, they go in with the Pi and DAC, sliding down grooves in the base's
+# corners: no hole needs room for anything to move through it, so they fit
+# close and the connectors sit flush.
+BACK_PLATE_X = (14.0, OUT_W - 14.0)
+LEFT_PLATE_Y = (20.0, OUT_D - WALL - 0.5)
+TONGUE_T, TONGUE_L, SLIDE = 1.2, 1.6, 0.15   # the plates' end tongues, and clearance round them
+PLATE_LIFT = 0.2                             # off the floor: the connectors set their height
 
 # --- Feet and kickstand -------------------------------------------------------
 # Nothing hangs below the floor, so the base prints floor-down without
@@ -139,7 +152,7 @@ TOP_Z = SCREEN_Z + SCREEN_T                  # no lid: the walls rise to the gla
 FEET_H, PAD_T, FOOT_R = 8.0, 1.0, 6.0        # stick-on rubber pads under the feet and spines
 FRONT_FEET = [(18.0, FOOT_R + 2), (OUT_W - 18.0, FOOT_R + 2)]   # clear of the screen's screw bores
 LEG_T, ARM_W, ARM_GAP, LUG_W, FOOT_W = 6.0, 4.5, 0.5, 3.0, 8.0
-AXIS_Y, AXIS_Z = OUT_D - 13.0, -(LEG_T / 2 + 0.6)   # the hinge: an M3 x 30 and nut each side
+AXIS_Y, AXIS_Z = OUT_D - 14.0, -(LEG_T / 2 + 0.6)   # the hinge: an M3 x 30 and nut each side
 TOOTH_R = 5.5
 SPINE_Y = AXIS_Y + TOOTH_R + 1.0             # the rails' spines start behind the teeth
 OVER = 5.0                                   # degrees past vertical
@@ -147,17 +160,17 @@ LEGS = (45, 30, 15)                          # outermost (longest) first
 SET_W = 2 * LUG_W + ARM_GAP + len(LEGS) * (ARM_W + ARM_GAP)
 SETS_X = (3.0, 112.5)                        # left set starts, right set ends: clear of the Pi's and screen's screws
 BOSS_H = 2.0                                 # floor bosses for the rails' M3 x 3 heat-set inserts
-RAIL_SCREWS = [(x, (SPINE_Y + OUT_D - 0.5) / 2) for x0 in (SETS_X[0], SETS_X[1] - SET_W) for x in (x0 + 5.5, x0 + SET_W - 5.5)]
+RAIL_SCREWS = [(x, OUT_D - WALL - 2.4) for x0 in (SETS_X[0], SETS_X[1] - SET_W) for x in (x0 + 5.5, x0 + SET_W - 5.5)]
 TILT = float(os.environ.get("TILT", 30))     # shown on this leg (0: flat, all folded)
 
 # --- Labels --------------------------------------------------------------------
 # Debossed into the outside faces. On their own they read in raking light;
 # filled (a second filament, or paint wiped into them) they read at a glance.
 # Light on dark, words and not colours, for anyone colourblind.
-FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT = str(Path(__file__).resolve().parent / "fonts" / "GeistMono-Bold.ttf")   # Geist Mono (SIL OFL), as in the logo
 DEBOSS = 0.6
 JACK_NAMES = {"RCA L": "L", "RCA R": "R", "3.5 mm": "LINE"}
-REVISION = "kdj  rev A"
+REVISION = "KDJ-1  rev A"
 # Each face a label can sit on: (the text's x, the face's outward normal), so
 # it reads the right way round from outside.
 FACES = {"back": ((-1, 0, 0), (0, 1, 0)), "front": ((1, 0, 0), (0, -1, 0)),
@@ -203,12 +216,30 @@ def about_axis(deg):
     return Pos(0, AXIS_Y, AXIS_Z) * Rot(deg, 0, 0) * Pos(0, -AXIS_Y, -AXIS_Z)
 
 
-def label_solid(text, size, face, at, depth=DEBOSS):
-    """Letters size mm tall, centred at a point on a face and reaching depth
-    into it: cut from the part for the deboss, or kept as the fill."""
+def on_face(sketch, face, at, depth, proud=0.0):
+    """A flat sketch centred at a point on a face, reaching depth into it (and
+    proud of it, for a clean cut): cut from a part, or kept as a fill."""
     x_dir, normal = FACES[face]
-    letters = Pos(0, 0, -depth) * extrude(Text(text, font_size=size, font_path=FONT, align=(Align.CENTER, Align.CENTER)), amount=depth)
-    return Plane(origin=at, x_dir=x_dir, z_dir=normal).location * letters
+    solid = Pos(0, 0, -depth) * extrude(sketch, amount=depth + proud)
+    return Plane(origin=at, x_dir=x_dir, z_dir=normal).location * solid
+
+
+def label_solid(text, size, face, at, depth=DEBOSS):
+    """Letters size mm tall."""
+    return on_face(Text(text, font_size=size, font_path=FONT, align=(Align.CENTER, Align.CENTER)), face, at, depth)
+
+
+def logo_sketch(h=12.0):
+    """The KDJ-1 model plate, h mm tall: a rounded frame, a rivet at each end,
+    the name in Geist Mono. Drawn at 320 x 110, strokes kept to 1 mm or more
+    so it prints."""
+    k = h / 110
+    w, r = 320 * k, 16 * k
+    stroke = max(8 * k, 1.0)
+    frame = RectangleRounded(w, h, r) - RectangleRounded(w - 2 * stroke, h - 2 * stroke, r - stroke)
+    rivets = [Pos(sx * 130 * k, 0) * Circle(max(7 * k, 0.9)) for sx in (-1, 1)]
+    name = Text("KDJ-1", font_size=58 * k, font_path=FONT, align=(Align.CENTER, Align.CENTER))
+    return frame + rivets[0] + rivets[1] + name
 
 
 def tag(shape, label, color):
@@ -219,15 +250,40 @@ def tag(shape, label, color):
 
 # --- Parts ------------------------------------------------------------------
 
+def sewn(model):
+    """The STEP models most parts as loose faces, not solids, and a boolean
+    can't see a face. Sew them; those that close up (the HDMI ports among
+    them) become solids. The rest stay faces: the distance check sees them."""
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
+    from OCP.TopAbs import TopAbs_SHELL
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+    in_solids = {hash(sh) for so in model.solids() for sh in so.shells()}
+    loose = [sh for sh in model.shells() if hash(sh) not in in_solids]
+    sewing = BRepBuilderAPI_Sewing(0.02)
+    for sh in loose:
+        sewing.Add(sh.wrapped)
+    sewing.Perform()
+    made, found = [], TopExp_Explorer(sewing.SewedShape(), TopAbs_SHELL)
+    while found.More():
+        shell = TopoDS.Shell(found.Current())
+        if BRep_Tool.IsClosed_s(shell):
+            solid = Solid(BRepBuilderAPI_MakeSolid(shell).Solid())
+            made.append(solid if solid.volume > 0 else Solid(solid.wrapped.Reversed()))
+        found.Next()
+    return Compound(list(model.solids()) + made + loose)
+
+
 def pi_model():
     """The Pi 4 STEP, upright, its board's corner at the origin and its top
     at z = PI_T, then turned and placed in the box. Cached as BREP."""
-    cache = PARTS / "pi4.brep"
+    cache = PARTS / "pi4-sewn.brep"
     src = PARTS / "raspberry_pi_4_model_b.step"
     if cache.exists() and cache.stat().st_mtime > src.stat().st_mtime:
         pi = import_brep(str(cache))
     else:
-        pi = import_step(str(src))
+        pi = sewn(import_step(str(src)))
         export_brep(pi, str(cache))
     # Its file lies on its side: board in XZ, components toward +Y.
     pi = Rot(90, 0, 0) * pi
@@ -245,7 +301,8 @@ def heatsink_model():
 def dac_model():
     hz = BOARD_Z + PI_T + HAT_GAP
     parts = []
-    board = Pos(PI_X + PI_W - HAT_W, PI_Y, hz) * Box(HAT_W, HAT_D, HAT_T, align=MIN)
+    # 0.5 mm deeper than the Pi: the extra is on the header side, not the jacks'.
+    board = Pos(PI_X + PI_W - HAT_W, PI_Y - (HAT_D - PI_D), hz) * Box(HAT_W, HAT_D, HAT_T, align=MIN)
     for hx, hy in PI_HOLES:
         x, y, _ = placed(hx, hy)
         board -= Pos(x, y, hz - 1) * Cylinder(1.35, HAT_T + 2, align=CTR_XY)
@@ -315,53 +372,98 @@ def ribbon_model():
 
 # --- The printed box ---------------------------------------------------------
 
-def port_cutouts():
-    cuts = []
-    for name, edge, c, w, h, hole in PI_PORTS:
-        if hole is None:
+def plate_holes():
+    """(face, cutter) for every hole in the plates: each connector's outline
+    plus HOLE_GAP, a pocket outside where a plug's grip reaches in, and a
+    window over the screen's backlight key."""
+    out = []
+    for name, edge, (a0, a1), (z0, z1), reach, shape, pocket in PI_PORTS:
+        face, u, z = ("back" if edge == "s" else "left"), (a0 + a1) / 2, BOARD_Z + (z0 + z1) / 2
+        at = (placed(u, 0)[0], OUT_D, z) if edge == "s" else (0, placed(0, u)[1], z)
+        w, h = a1 - a0 + 2 * HOLE_GAP, z1 - z0 + 2 * HOLE_GAP
+        into = reach - (FACE_INSET + (OVERHANG_S if edge == "s" else OVERHANG_E) - WALL)   # how far it reaches into the plate
+        if shape == "relief":                       # covered: a recess on the inside face
+            x = placed(u, 0)[0]
+            out.append((face, Pos(x - w / 2, OUT_D - WALL - 0.5, z - h / 2) * Box(w, 0.5 + into + HOLE_GAP, h, align=MIN)))
             continue
-        cw, ch = hole
-        z = BOARD_Z + PAD_T + PI_T + h / 2          # centred on the jack
-        if edge == "s":
-            x, _, _ = placed(c, 0)
-            cuts.append(Pos(x, OUT_D - WALL - 1, z) * Box(cw, WALL + 2, ch, align=(Align.CENTER, Align.MIN, Align.CENTER)))
-        else:
-            _, y, _ = placed(0, c)
-            cuts.append(Pos(-1, y, z) * Box(WALL + 2, cw, ch, align=(Align.MIN, Align.CENTER, Align.CENTER)))
-    # A notch over the screen's backlight key, to reach it.
-    cuts.append(Pos(SCREEN_X + 5 + 15.03 - 1, OUT_D - WALL - 1, BASE_H - 5) * Box(8, WALL + 2, 6, align=MIN))
+        out.append((face, on_face(Circle(w / 2) if shape == "round" else RectangleRounded(w, h, 0.6), face, at, WALL + 1, proud=0.5)))
+        if pocket:                                  # down to the connector's face
+            depth = FACE_INSET + (OVERHANG_S if edge == "s" else OVERHANG_E) - reach
+            out.append((face, on_face(RectangleRounded(*pocket, 1.5), face, at, depth, proud=0.5)))
     hz = BOARD_Z + PI_T + HAT_GAP + HAT_T
     for name, jx, d, cz, _ in HAT_JACKS:
         if name in CUT_JACKS:
-            x, _, _ = placed(jx, 0)
-            r = JACK_HOLES.get(name, d + 2 * PORT_GAP) / 2
-            for lift in (0, HEADER_PUSH):
-                cuts.append(Pos(x, OUT_D - WALL - 1, hz + cz + lift) * Rot(-90, 0, 0) * Cylinder(r, WALL + 2, align=CTR_XY))
-            cuts.append(Pos(x, OUT_D - WALL - 1, hz + cz) * Box(2 * r, WALL + 2, HEADER_PUSH, align=(Align.CENTER, Align.MIN, Align.MIN)))
-    return cuts
+            out.append(("back", on_face(Circle(d / 2 + HOLE_GAP), "back", (placed(jx, 0)[0], OUT_D, hz + cz), WALL + 1, proud=0.5)))
+    out.append(("back", Pos(SCREEN_X + 5 + 15.03 - 1, OUT_D - WALL - 1, BASE_H - 5) * Box(8, WALL + 2, 6, align=MIN)))
+    return out
+
+
+def plate_labels():
+    """(face, letters): port names beside their holes, positioned from them."""
+    ports = {p[0]: p for p in PI_PORTS}
+    hz = BOARD_Z + PI_T + HAT_GAP + HAT_T
+    jacks_top = max(hz + cz + d / 2 + HOLE_GAP for n, _, d, cz, _ in HAT_JACKS if n in CUT_JACKS)
+    out = [("back", JACK_NAMES[n], 4.0, (placed(jx, 0)[0], OUT_D, jacks_top + 4)) for n, jx, *_ in HAT_JACKS if n in CUT_JACKS]
+    usbc_z = BOARD_Z + sum(ports["USB-C"][3]) / 2
+    low = (FLOOR + PLATE_LIFT + usbc_z - ports["USB-C"][6][1] / 2) / 2   # under the USB-C pocket
+    out.append(("back", "5V", 3.0, (placed(sum(ports["USB-C"][2]) / 2, 0)[0], OUT_D, low)))
+    out.append(("back", "AUX", 3.0, (placed(sum(ports["Audio"][2]) / 2, 0)[0], OUT_D, low)))
+    side_z = BOARD_Z + max(ports[n][3][1] for n in ("USB 3", "USB 2", "Ethernet")) + HOLE_GAP + 4
+    usb_y = (placed(0, sum(ports["USB 3"][2]) / 2)[1] + placed(0, sum(ports["USB 2"][2]) / 2)[1]) / 2
+    out.append(("left", "USB", 4.0, (0, usb_y, side_z)))
+    out.append(("left", "LAN", 4.0, (0, placed(0, sum(ports["Ethernet"][2]) / 2)[1], side_z)))
+    return [(face, label_solid(t, size, face, at)) for face, t, size, at in out]
 
 
 def base_labels():
-    """Port names beside their holes, the name on the front, a revision
-    underneath. Positions follow the ports, so they move with them."""
-    hz = BOARD_Z + PI_T + HAT_GAP + HAT_T
-    jacks_bottom = min(hz + cz - JACK_HOLES.get(n, d + 2 * PORT_GAP) / 2 for n, _, d, cz, _ in HAT_JACKS if n in CUT_JACKS)
-    ports = {p[0]: p for p in PI_PORTS}
-    def hole_z(name):                              # centre, bottom, top of a port's hole
-        _, _, _, _, h, (_, ch) = ports[name]
-        z = BOARD_Z + PAD_T + PI_T + h / 2
-        return z, z - ch / 2, z + ch / 2
-    usbc_z, usbc_bottom, usbc_top = hole_z("USB-C")
-    out = [(JACK_NAMES[n], 4.0, "back", (placed(jx, 0)[0], OUT_D, (usbc_top + jacks_bottom) / 2))
-           for n, jx, *_ in HAT_JACKS if n in CUT_JACKS]
-    out.append(("5V", 3.0, "back", (placed(ports["USB-C"][2], 0)[0], OUT_D, usbc_bottom / 2)))
-    side_z = max(hole_z(n)[2] for n in ("USB 3", "USB 2", "Ethernet")) + 4
-    usb_y = (placed(0, ports["USB 3"][2])[1] + placed(0, ports["USB 2"][2])[1]) / 2
-    out.append(("USB", 4.0, "left", (0, usb_y, side_z)))
-    out.append(("LAN", 4.0, "left", (0, placed(0, ports["Ethernet"][2])[1], side_z)))
-    out.append(("kdj", 10.0, "front", (OUT_W / 2, 0, TOP_Z / 2)))
-    return [label_solid(t, size, face, at, depth=0.4 if face == "bottom" else DEBOSS) for t, size, face, at in out] + \
-        [label_solid(REVISION, 4.0, "bottom", (OUT_W / 2, FRONT_FEET[0][1] + 3, 0), depth=0.4)]
+    """The KDJ-1 plate on the front, a revision underneath."""
+    return [on_face(logo_sketch(), "front", (OUT_W / 2, 0, TOP_Z / 2), DEBOSS),
+            label_solid(REVISION, 4.0, "bottom", (OUT_W / 2, FRONT_FEET[0][1] + 3, 0), depth=0.4)]
+
+
+def tongues(groove=False):
+    """The plates' end tongues [back plate's two, left plate's two], or
+    (groove) the slots in the base's corners they slide down, SLIDE bigger."""
+    g = SLIDE if groove else 0.0
+    t, reach = TONGUE_T + 2 * g, TONGUE_L + g       # across the wall, into the corner
+    z0 = FLOOR if groove else FLOOR + PLATE_LIFT
+    h = (TOP_Z + 1 if groove else TOP_Z) - z0
+    (bx0, bx1), (ly0, ly1) = BACK_PLATE_X, LEFT_PLATE_Y
+    yb, xl = OUT_D - WALL / 2 - t / 2, WALL / 2 - t / 2
+    over = SLIDE + 0.5                              # into the plate, or the opening
+    return [Pos(bx0 - reach, yb, z0) * Box(reach + over, t, h, align=MIN),
+            Pos(bx1 - over, yb, z0) * Box(reach + over, t, h, align=MIN),
+            Pos(xl, ly0 - reach, z0) * Box(t, reach + over, h, align=MIN),
+            Pos(xl, ly1 - over, z0) * Box(t, reach + over, h, align=MIN)]
+
+
+def back_plate(lettered=True):
+    """Prints outside face down."""
+    x0, x1 = BACK_PLATE_X
+    plate = Pos(x0 + SLIDE, OUT_D - WALL, FLOOR + PLATE_LIFT) * Box(x1 - x0 - 2 * SLIDE, WALL, TOP_Z - FLOOR - PLATE_LIFT, align=MIN)
+    for t in tongues()[:2]:
+        plate += t
+    for face, cut in plate_holes() + (plate_labels() if lettered else []):
+        if face == "back":
+            plate -= cut
+    return tag(plate, "Back plate (printed)", "#7c8492")
+
+
+def left_plate(lettered=True):
+    """With the shelf for the screen's back-left corner, which sits over the
+    USB jacks and so has to come in with them. Prints outside face down, the
+    shelf standing up."""
+    y0, y1 = LEFT_PLATE_Y
+    plate = Pos(0, y0 + SLIDE, FLOOR + PLATE_LIFT) * Box(WALL, y1 - y0 - 2 * SLIDE, TOP_Z - FLOOR - PLATE_LIFT, align=MIN)
+    for t in tongues()[2:]:
+        plate += t
+    x, y = min(SCREEN_CORNERS, key=lambda p: p[0] - p[1])
+    shelf_z = BOARD_Z + max(p[3][1] for p in PI_PORTS if p[1] == "e") + 0.6
+    plate += Pos(WALL - 0.01, y - POST_R, shelf_z) * Box(x + POST_R - WALL + 0.01, y1 - SLIDE - (y - POST_R), POST_TOP - shelf_z, align=MIN)
+    for face, cut in plate_holes() + (plate_labels() if lettered else []):
+        if face == "left":
+            plate -= cut
+    return tag(plate, "Left plate (printed)", "#7c8492")
 
 
 def leg_label(i, angle):
@@ -374,8 +476,11 @@ def base_model(lettered=True):
     """Printed floor-down with no support: nothing hangs below the floor, and
     nothing inside overhangs past 45 degrees."""
     base = Box(OUT_W, OUT_D, TOP_Z, align=MIN) - Pos(WALL, WALL, FLOOR) * Box(IN_W, IN_D, TOP_Z, align=MIN)
-    for c in port_cutouts():
-        base -= c
+    (x0, x1), (y0, y1) = BACK_PLATE_X, LEFT_PLATE_Y   # openings for the I/O plates, and their grooves
+    base -= Pos(x0, OUT_D - WALL - 0.01, FLOOR) * Box(x1 - x0, WALL + 1, TOP_Z, align=MIN)
+    base -= Pos(-1, y0, FLOOR) * Box(WALL + 1.01, y1 - y0, TOP_Z, align=MIN)
+    for g in tongues(groove=True):
+        base -= g
     for i in range(8):                              # floor vents under the Pi: air in
         x, y, _ = placed(PI_W - 14 - i * 8, PI_D - 12)
         base -= Pos(x, y, -1) * Box(3, PI_D - 24, FLOOR + 2, align=MIN)
@@ -388,20 +493,13 @@ def base_model(lettered=True):
         base -= Pos(x, y, -1) * Cylinder(2.5, FLOOR + 1, align=CTR_XY)
     back_left = min(SCREEN_CORNERS, key=lambda p: p[0] - p[1])
     for x, y in SCREEN_CORNERS:
-        if (x, y) == back_left:
-            # A shelf off the two walls, above the USB-A jacks, its underside
-            # sloping 45 degrees down to the back wall so it needs no support.
-            y0 = y - POST_R
-            depth = OUT_D - WALL - y0
-            ledge = Pos(WALL - 0.1, y0, POST_TOP - 3 - depth) * Box(x + POST_R - WALL, depth + 0.1, 3 + depth, align=MIN)
-            ledge -= Pos(0, y0, POST_TOP - 3) * Rot(-45, 0, 0) * Box(4 * OUT_W, 200, 200, align=(Align.CENTER, Align.CENTER, Align.MAX))
-            base += ledge
+        if (x, y) == back_left:                     # its shelf is on the left plate
             continue
         base += Pos(x, y, 0) * Cylinder(POST_R, POST_TOP, align=CTR_XY)
         base -= Pos(x, y, -1) * Cylinder(BORE_R, POST_TOP - SHELF + 1, align=CTR_XY)
         base -= Pos(x, y, -1) * Cylinder(1.4, POST_TOP + 2, align=CTR_XY)
-    for x, y in RAIL_SCREWS:                        # bosses for the rails' inserts, pressed in from below
-        base += Pos(x, y, FLOOR) * Cylinder(3.5, BOSS_H, align=CTR_XY)
+    for x, y in RAIL_SCREWS:                        # bosses for the rails' inserts, pressed in from below, short of the back plate
+        base += (Pos(x, y, FLOOR) * Cylinder(3.5, BOSS_H, align=CTR_XY)) & (Pos(0, 0, 0) * Box(OUT_W, OUT_D - WALL - SLIDE, TOP_Z, align=MIN))
         base -= Pos(x, y, -1) * Cylinder(2.0, FLOOR + BOSS_H + 1 - 0.6, align=CTR_XY)
     for x, y in FRONT_FEET:                         # shallow recesses to locate the front feet
         base -= Pos(x, y, -1) * Cylinder(FOOT_R + 0.2, 1.6, align=CTR_XY)
@@ -476,7 +574,7 @@ def solids_of(shape):
     return list(shape.solids()) if hasattr(shape, "solids") else [shape]
 
 
-PRINTED = ("base", "rails", "feet", "legs")
+PRINTED = ("base", "plates", "rails", "feet", "legs")
 
 # Parts that go into each other by design: the Pi's header pins into the DAC's socket.
 MATES = [{"Raspberry Pi 4", "DAC socket"}]
@@ -495,6 +593,7 @@ def main():
     groups = {
         "base": [base_model()],
         "legs": [leg_model(i, a, a == TILT) for i, a in enumerate(LEGS)],
+        "plates": [back_plate(), left_plate()],
         "rails": [rail_model(0), rail_model(1)],
         "feet": [foot_model(x, y) for x, y in FRONT_FEET],
         "pi": [pi_model(), heatsink_model()],
@@ -503,6 +602,7 @@ def main():
         "ribbon": ribbon_model(),
         # The letters' fill, as a second filament or paint would leave it.
         "labels": [tag(Compound(base_labels()), "Label fill", "#f4f5f7")] +
+                  [tag(Compound([cut for face, cut in plate_labels() if face == f]), "Label fill", "#f4f5f7") for f in ("back", "left")] +
                   [tag(about_axis(opening(a)) * leg_label(i, a) if a == TILT else leg_label(i, a), "Label fill", "#f4f5f7")
                    for i, a in enumerate(LEGS)],
     }
@@ -523,6 +623,11 @@ def main():
     # The fills, for a second filament: load with the part they belong to, as
     # a part of the same object, and give them the other filament.
     atomic(OUT / "base-labels.stl", lambda f: export_stl(groups["labels"][0], f))
+    # The plates outside face down: the back turned about x, the left about y.
+    flat = {"back": Pos(0, 0, OUT_D) * Rot(-90, 0, 0), "left": Rot(0, -90, 0)}
+    for (face, plate), fill in zip(zip(("back", "left"), groups["plates"]), groups["labels"][1:3]):
+        atomic(OUT / f"plate-{face}.stl", lambda f: export_stl(flat[face] * plate, f))
+        atomic(OUT / f"plate-{face}-labels.stl", lambda f: export_stl(flat[face] * fill, f))
     for i, angle in enumerate(LEGS):
         atomic(OUT / f"leg-{angle}-label.stl", lambda f: export_stl(Pos(0, 0, LEG_T / 2 - AXIS_Z) * leg_label(i, angle), f))
     for i, angle in enumerate(LEGS):
@@ -534,7 +639,12 @@ def main():
     # The lettering is 0.6 mm into 2.4 mm outer walls, so it can't touch
     # anything inside: check an unlettered base, which is far quicker. The
     # fills sit in their own cuts.
-    checked = dict(groups, base=[base_model(lettered=False)])
+    # The Pi's loose faces make booleans crawl and can't overlap anything:
+    # the overlap check takes its solids, the distance check below all of it.
+    pi_full = groups["pi"][0]
+    pi_solids = tag(Compound(list(pi_full.solids())), pi_full.label, "#2e7d32")
+    checked = dict(groups, base=[base_model(lettered=False)], plates=[back_plate(lettered=False), left_plate(lettered=False)],
+                   pi=[pi_solids] + groups["pi"][1:])
     pieces = [(g, s) for g, shapes in checked.items() if g != "labels" for s in shapes]
     hits, overlaps = [], []
     bbs = [(g, s, s.bounding_box()) for g, s in pieces]
@@ -552,6 +662,13 @@ def main():
         if vol > 0.05:
             hits.append({"a": a.label, "b": b.label, "mm3": round(vol, 2)})
             overlaps.append(tag(Compound(solids), f"{a.label} × {b.label}", "#ff2d2d"))
+    # Faces the overlap check can't see (most of the Pi's STEP): any printed
+    # part but the base (which the Pi sits on) within 0.1 mm of the Pi or DAC.
+    for g in ("plates", "rails", "legs", "feet"):
+        for a in checked[g]:
+            for b in groups["pi"] + checked["dac"]:
+                if boxes_meet(a.bounding_box(), b.bounding_box()) and a.distance_to(b) < 0.1:
+                    hits.append({"a": a.label, "b": b.label, "touching": True})
     if overlaps:
         atomic(LIVE / "collisions.glb", lambda f: export_gltf(on_desk * Compound(children=overlaps), f, binary=True))
     elif (LIVE / "collisions.glb").exists():

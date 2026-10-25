@@ -144,7 +144,7 @@ async function load(stamp) {
   for (const c of report.collisions) {
     const li = document.createElement('div');
     li.className = 'hit';
-    li.textContent = c.error ? `${c.a} × ${c.b}: couldn't check` : `${c.a} × ${c.b}: ${c.mm3} mm³`;
+    li.textContent = c.error ? `${c.a} × ${c.b}: couldn't check` : c.touching ? `${c.a} touches ${c.b}` : `${c.a} × ${c.b}: ${c.mm3} mm³`;
     list.appendChild(li);
   }
   if (!box.isEmpty()) {
