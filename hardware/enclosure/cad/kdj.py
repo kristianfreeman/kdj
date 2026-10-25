@@ -139,6 +139,16 @@ LEFT_PLATE_Y = (20.0, OUT_D - WALL - 0.5)
 TONGUE_T, TONGUE_L, SLIDE = 1.2, 1.6, 0.15   # the plates' end tongues, and clearance round them
 PLATE_LIFT = 0.2                             # off the floor: the connectors set their height
 
+# --- Air -----------------------------------------------------------------------
+# In through the floor (slots placed between the folded legs' crossbars),
+# out through the right wall, and out up high, just under the screen, where
+# warm air would otherwise pool. An optional 30 mm 5 V fan bolts inside the
+# right wall, blowing out, level with the gap between the Pi and the DAC; its
+# grille is a vent until then.
+FAN_SIZE, FAN_T, FAN_HOLES = 30.0, 10.0, 24.0  # frame, thickness, M3 hole spacing
+FAN_AT = (35.0, FLOOR + 1 + 30.0 / 2)          # its centre on the right wall: y, z
+HIGH_VENTS_Z = (POST_TOP - 0.7, SCREEN_Z - 0.6)  # a row just under the screen's board
+
 # --- Feet and kickstand -------------------------------------------------------
 # Nothing hangs below the floor, so the base prints floor-down without
 # support. Under it, screwed on: two hinge rails at the back (their spines
@@ -472,6 +482,48 @@ def leg_label(i, angle):
     return label_solid(str(angle), 5.0, "bottom", ((l0 + r1) / 2, AXIS_Y - leg_length(angle) + FOOT_W / 2, AXIS_Z - LEG_T / 2), depth=0.5)
 
 
+def vents():
+    """Cutters for the air: the floor slots, the fan's grille and holes, and
+    the high rows on the right and front walls."""
+    cuts = []
+    # Floor: across the Pi's footprint, clear of the legs' arms, in pieces
+    # between where their crossbars lie folded.
+    bands = [(AXIS_Y - leg_length(a) - 1, AXIS_Y - leg_length(a) + FOOT_W + 1) for a in LEGS]
+    for x in [23.0 + 6 * i for i in range(12)]:
+        y, end = PI_Y + 9, PI_Y + 47
+        for b0, b1 in sorted(bands) + [(end, end)]:
+            if b1 <= y:
+                continue
+            if min(b0, end) - y >= 4:
+                cuts.append(Pos(x, y, -1) * Box(3, min(b0, end) - y, FLOOR + 2, align=MIN))
+            y = max(y, b1)
+    # Right wall: the fan's grille (upright slots inside its circle) and its
+    # four M3 holes; then the high row.
+    fy, fz = FAN_AT
+    r = FAN_SIZE / 2 - 1.5
+    for dy in [-12 + 3.5 * i for i in range(8)]:
+        h = 2 * math.sqrt(max(r * r - (dy + 1) ** 2, 0)) - 1
+        if h > 3:
+            cuts.append(Pos(OUT_W - WALL - 1, fy + dy, fz - h / 2) * Box(WALL + 2, 2, h, align=MIN))
+    for sy in (-1, 1):
+        for sz in (-1, 1):
+            cuts.append(Pos(OUT_W - WALL - 1, fy + sy * FAN_HOLES / 2, fz + sz * FAN_HOLES / 2) * Rot(0, 90, 0) * Cylinder(1.7, WALL + 2, align=CTR_XY))
+    z0, z1 = HIGH_VENTS_Z
+    for y in [14.0 + 5 * i for i in range(12)]:
+        cuts.append(Pos(OUT_W - WALL - 1, y, z0) * Box(WALL + 2, 2.5, z1 - z0, align=MIN))
+    for x in [22.0 + 5 * i for i in range(17)]:
+        cuts.append(Pos(x, -1, z0) * Box(2.5, WALL + 2, z1 - z0, align=MIN))
+    return cuts
+
+
+def fan_model():
+    """The optional fan, for the collision check (bought, not printed)."""
+    fy, fz = FAN_AT
+    fan = Pos(OUT_W - WALL - FAN_T, fy - FAN_SIZE / 2, fz - FAN_SIZE / 2) * Box(FAN_T, FAN_SIZE, FAN_SIZE, align=MIN)
+    fan -= Pos(OUT_W - WALL - FAN_T - 1, fy, fz) * Rot(0, 90, 0) * (Cylinder(FAN_SIZE / 2 - 1.5, FAN_T + 2, align=CTR_XY) - Cylinder(6, FAN_T + 2, align=CTR_XY))
+    return tag(fan, "Fan (30 mm, optional)", "#3d4450")
+
+
 def base_model(lettered=True):
     """Printed floor-down with no support: nothing hangs below the floor, and
     nothing inside overhangs past 45 degrees."""
@@ -481,11 +533,8 @@ def base_model(lettered=True):
     base -= Pos(-1, y0, FLOOR) * Box(WALL + 1.01, y1 - y0, TOP_Z, align=MIN)
     for g in tongues(groove=True):
         base -= g
-    for i in range(8):                              # floor vents under the Pi: air in
-        x, y, _ = placed(PI_W - 14 - i * 8, PI_D - 12)
-        base -= Pos(x, y, -1) * Box(3, PI_D - 24, FLOOR + 2, align=MIN)
-    for i in range(8):                              # right wall vents, up high: hot air out
-        base -= Pos(OUT_W - WALL - 1, WALL + 10 + i * 7, FLOOR + 4) * Box(WALL + 2, 3, POST_TOP - FLOOR - 8, align=MIN)
+    for cut in vents():
+        base -= cut
     for hx, hy in PI_HOLES:                         # Pi standoffs: M2.5 up from under the floor, heads recessed
         x, y, _ = placed(hx, hy)
         base += Pos(x, y, FLOOR) * Cylinder(3, STANDOFF_H, align=CTR_XY)
@@ -597,6 +646,7 @@ def main():
         "rails": [rail_model(0), rail_model(1)],
         "feet": [foot_model(x, y) for x, y in FRONT_FEET],
         "pi": [pi_model(), heatsink_model()],
+        "fan": [fan_model()],
         "dac": dac_model(),
         "screen": screen_model(),
         "ribbon": ribbon_model(),
