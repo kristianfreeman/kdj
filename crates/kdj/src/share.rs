@@ -120,10 +120,12 @@ impl Server {
         let _ = conn.set_write_timeout(Some(IO_TIMEOUT));
         let allowed =
             conn.peer_addr().is_ok_and(|a| a.ip().is_loopback() || self.net.as_ref().is_none_or(|n| n.knows(a.ip())));
-        let reply = if allowed {
-            read_head(&mut conn).map_or(Reply::Status(400, "Bad Request"), |head| self.route(&head))
-        } else {
-            Reply::Status(403, "Forbidden")
+        // The request is read either way: closing with it unread resets the
+        // connection, and the asker never sees the answer.
+        let reply = match read_head(&mut conn) {
+            None => Reply::Status(400, "Bad Request"),
+            Some(head) if allowed => self.route(&head),
+            Some(_) => Reply::Status(403, "Forbidden"),
         };
         let _ = reply.send(&mut conn);
     }

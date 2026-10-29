@@ -8,9 +8,12 @@
 //! is plugged into. So one Xone:K3 split down the middle plays two Pis, each
 //! with its own output into its own mixer channel.
 //!
-//! Hellos go to a multicast group. Controls and LEDs go straight to the one
-//! kdj that needs them (multicast on Wi-Fi can wait for the access point's
-//! next beacon), and are only taken from kdjs that have said hello.
+//! Hellos go to a multicast group, on every network this kdj is on (Wi-Fi
+//! and a cable can both be up, and come and go), and straight to every kdj
+//! already heard, since multicast on Wi-Fi gets lost. Controls and LEDs go
+//! straight to the one kdj that needs them (multicast on Wi-Fi can wait for
+//! the access point's next beacon), and are only taken from kdjs that have
+//! said hello.
 //!
 //! Who holds a letter: a kdj starting up listens before it claims one, so it
 //! never takes a letter that's in use. Two claiming the same letter (started
@@ -24,7 +27,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Protocol, SockRef, Socket, Type};
 
 /// The hello group and port.
 const GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 75, 74);
@@ -34,7 +37,10 @@ const PORT: u16 = 47_474;
 const MAGIC: [u8; 4] = *b"kdj2";
 const HELLO_EVERY: Duration = Duration::from_secs(1);
 /// Silent this long: gone.
-const PEER_TIMEOUT: Duration = Duration::from_millis(3500);
+const PEER_TIMEOUT: Duration = Duration::from_secs(5);
+/// A kdj's hellos stop coming from the address its controls go to for this
+/// long (its cable unplugged, say): send them to one they still come from.
+const ADDR_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long a kdj listens before claiming a letter (over a hello's interval,
 /// so everyone already up has been heard).
 const CLAIM_WAIT: Duration = Duration::from_millis(1500);
@@ -224,12 +230,20 @@ fn first_free(count: usize, others: &[Claim]) -> Option<usize> {
 #[derive(Clone, Debug)]
 struct Peer {
     hello: Hello,
-    /// Where it sends from and takes controls and LEDs.
+    /// Where it takes controls and LEDs: where its hellos come from, kept
+    /// while they keep coming from there.
     addr: SocketAddr,
+    /// Every address it has said hello from lately, and when (a kdj on a
+    /// cable and Wi-Fi at once has two, and sends from either).
+    ips: Vec<(IpAddr, Instant)>,
     seen: Instant,
 }
 
 impl Peer {
+    fn has(&self, ip: IpAddr) -> bool {
+        self.ips.iter().any(|&(i, _)| i == ip)
+    }
+
     fn claim(&self) -> Claim<'_> {
         let h = &self.hello;
         Claim { name: &h.name, port: h.port, first: h.first.into(), count: h.count.into(), stamp: h.stamp }
@@ -258,6 +272,8 @@ struct State {
     top_stamp: u32,
     /// Holding a letter (and saying so); not while still listening at start.
     claimed: bool,
+    /// Something in our hello changed: say it now, not at the next one.
+    hello_now: bool,
     /// This kdj's library service and what's in it (see `Hello`).
     library: (u16, u32),
     using: Vec<Use>,
@@ -270,7 +286,7 @@ type MidiSink = Box<dyn FnMut(&[u8]) + Send>;
 pub struct Net {
     name: String,
     count: usize,
-    /// Sends controls, LEDs and hellos; takes controls and LEDs.
+    /// Sends and takes controls and LEDs.
     data: UdpSocket,
     first: AtomicUsize,
     /// The controller is plugged in here.
@@ -351,7 +367,7 @@ impl Net {
 
     /// Whether `ip` is another kdj's (it has said hello).
     pub fn knows(&self, ip: IpAddr) -> bool {
-        self.state().peers.iter().any(|p| p.addr.ip() == ip)
+        self.state().peers.iter().any(|p| p.has(ip))
     }
 
     /// Say where this kdj's library service is, and the stamp of what's in it.
@@ -466,10 +482,32 @@ impl Net {
         }
     }
 
-    /// Say hello now (after a change), if holding a letter.
+    /// Say hello now (after a change), not at the next one.
     fn say_hello(&self) {
-        if self.state().claimed {
-            let _ = self.data.send_to(&encode_hello(&self.hello()), SocketAddrV4::new(GROUP, PORT));
+        self.state().hello_now = true;
+    }
+
+    /// Say hello on every network in `nets`, and to every kdj heard (or just
+    /// `to`), if holding a letter. Sending can fail while a network comes
+    /// or goes; the next hello is a second away.
+    fn send_hello(&self, sock: &UdpSocket, nets: &[Ipv4Addr], to: Option<IpAddr>) {
+        let (claimed, peers) = {
+            let s = self.state();
+            (s.claimed, s.peers.iter().map(|p| p.addr.ip()).collect::<Vec<_>>())
+        };
+        if !claimed {
+            return;
+        }
+        let hello = encode_hello(&self.hello());
+        if to.is_none() {
+            for net in nets {
+                if SockRef::from(sock).set_multicast_if_v4(net).is_ok() {
+                    let _ = sock.send_to(&hello, SocketAddrV4::new(GROUP, PORT));
+                }
+            }
+        }
+        for ip in to.map_or(peers, |ip| vec![ip]) {
+            let _ = sock.send_to(&hello, SocketAddr::new(ip, PORT));
         }
     }
 
@@ -488,7 +526,7 @@ impl Net {
                 Err(e) => {
                     let e = e.to_string();
                     if last_error.as_ref() != Some(&e) {
-                        eprintln!("net: no network yet ({e}); decks on other kdjs can't share a controller");
+                        eprintln!("net: can't listen for other kdjs ({e}); trying again");
                         last_error = Some(e);
                     }
                 }
@@ -501,11 +539,16 @@ impl Net {
     fn hello_loop(&self, sock: &UdpSocket, started: Instant) -> std::io::Error {
         let mut buf = [0; 1500];
         let mut next_hello = Instant::now();
+        let mut nets = Vec::new();
         loop {
             match sock.recv_from(&mut buf) {
                 Ok((n, from)) => {
-                    if let Some(Packet::Hello(h)) = decode(&buf[..n]) {
-                        self.heard(h, from);
+                    // One just started: answer it now, so it hears this one
+                    // before it lets anyone in (or claims a letter).
+                    if let Some(Packet::Hello(h)) = decode(&buf[..n])
+                        && self.heard(h, from)
+                    {
+                        self.send_hello(sock, &nets, Some(from.ip()));
                     }
                 }
                 Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
@@ -513,43 +556,54 @@ impl Net {
             }
             self.forget_silent();
             self.settle(started);
-            if Instant::now() >= next_hello && self.state().claimed {
-                let to = SocketAddrV4::new(GROUP, PORT);
-                if let Err(e) = self.data.send_to(&encode_hello(&self.hello()), to) {
-                    return e;
-                }
+            let now = std::mem::take(&mut self.state().hello_now);
+            if now || Instant::now() >= next_hello {
+                nets = join(sock, &nets);
+                self.send_hello(sock, &nets, None);
                 next_hello = Instant::now() + HELLO_EVERY;
             }
         }
     }
 
-    fn heard(&self, h: Hello, from: SocketAddr) {
+    /// Take a hello `from` somewhere. True if it's from a kdj not heard
+    /// till now.
+    fn heard(&self, h: Hello, from: SocketAddr) -> bool {
         let addr = SocketAddr::new(from.ip(), h.port);
         let mine = h.port == self.port() && h.name == self.name;
         if mine {
-            return;
+            return false;
         }
+        let now = Instant::now();
         let mut s = self.state();
         s.top_stamp = s.top_stamp.max(h.stamp);
-        let changed = if let Some(p) = s.peers.iter_mut().find(|p| p.addr == addr) {
+        // The same kdj by name and port, whichever network it was heard on.
+        let known = s.peers.iter_mut().find(|p| (&p.hello.name, p.hello.port) == (&h.name, h.port));
+        let (changed, new) = if let Some(p) = known {
+            p.ips.retain(|&(ip, at)| ip != addr.ip() && now.duration_since(at) < PEER_TIMEOUT);
+            p.ips.push((addr.ip(), now));
+            let addr_heard = p.ips.iter().any(|&(ip, at)| ip == p.addr.ip() && now.duration_since(at) < ADDR_TIMEOUT);
+            if !addr_heard {
+                p.addr = addr;
+            }
             let moved = (p.hello.first, p.hello.count) != (h.first, h.count);
             let changed = p.hello != h;
             p.hello = h;
-            p.seen = Instant::now();
+            p.seen = now;
             if moved {
                 eprintln!("net: {} is {}", p.hello.name, role(p.claim().decks()));
             }
-            changed
+            (changed, false)
         } else {
-            let p = Peer { hello: h, addr, seen: Instant::now() };
+            let p = Peer { hello: h, addr, ips: vec![(addr.ip(), now)], seen: now };
             eprintln!("net: found {} ({})", p.hello.name, role(p.claim().decks()));
             s.peers.push(p);
-            true
+            (true, true)
         };
         drop(s);
         if changed {
             self.epoch.fetch_add(1, Ordering::Relaxed);
         }
+        new
     }
 
     fn forget_silent(&self) {
@@ -599,7 +653,7 @@ impl Net {
                 std::thread::sleep(RETRY);
                 continue;
             };
-            let known = self.state().peers.iter().any(|p| p.addr.ip() == from.ip());
+            let known = self.state().peers.iter().any(|p| p.has(from.ip()));
             match decode(&buf[..n]) {
                 Some(Packet::Midi(msg)) if known => {
                     if let Some(sink) = self.midi_sink.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
@@ -625,11 +679,64 @@ fn group_socket() -> std::io::Result<UdpSocket> {
     #[cfg(unix)]
     s.set_reuse_port(true)?;
     s.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, PORT).into())?;
-    s.join_multicast_v4(&GROUP, &Ipv4Addr::UNSPECIFIED)?;
     s.set_multicast_loop_v4(true)?;
     s.set_multicast_ttl_v4(1)?;
     s.set_read_timeout(Some(Duration::from_millis(100)))?;
     Ok(s.into())
+}
+
+/// Join the hello group on every network there is now (a cable plugged in,
+/// Wi-Fi turned on), given the ones `joined` already; the ones gone drop out,
+/// to be joined again if they come back.
+fn join(sock: &UdpSocket, joined: &[Ipv4Addr]) -> Vec<Ipv4Addr> {
+    let mut nets = networks();
+    if nets.is_empty() {
+        // Whichever the system picks (and none, it fails, till there's one).
+        nets.push(Ipv4Addr::UNSPECIFIED);
+    }
+    nets.retain(|net| {
+        joined.contains(net)
+            || sock.join_multicast_v4(&GROUP, net).map_or_else(|e| e.kind() == std::io::ErrorKind::AddrInUse, |()| true)
+    });
+    nets
+}
+
+/// This machine's address on each network that's up and takes multicast
+/// (not loopback).
+#[cfg(unix)]
+fn networks() -> Vec<Ipv4Addr> {
+    let mut list = std::ptr::null_mut();
+    // SAFETY: `list` is where getifaddrs puts the list it makes; freed below.
+    if unsafe { libc::getifaddrs(&raw mut list) } != 0 {
+        return Vec::new();
+    }
+    let mut nets = Vec::new();
+    let mut at = list;
+    while !at.is_null() {
+        // SAFETY: `at` is a node of the list getifaddrs made, not yet freed.
+        let ifa = unsafe { &*at };
+        let flags = ifa.ifa_flags.cast_signed();
+        let up = flags & libc::IFF_UP != 0 && flags & libc::IFF_MULTICAST != 0 && flags & libc::IFF_LOOPBACK == 0;
+        // SAFETY: a non-null `ifa_addr` points at a sockaddr, which starts
+        // with its family.
+        if up && !ifa.ifa_addr.is_null() && i32::from(unsafe { (*ifa.ifa_addr).sa_family }) == libc::AF_INET {
+            // SAFETY: an AF_INET address is a sockaddr_in.
+            let sin = unsafe { &*ifa.ifa_addr.cast::<libc::sockaddr_in>() };
+            let ip = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
+            if !nets.contains(&ip) {
+                nets.push(ip);
+            }
+        }
+        at = ifa.ifa_next;
+    }
+    // SAFETY: the list getifaddrs made, freed once.
+    unsafe { libc::freeifaddrs(list) };
+    nets
+}
+
+#[cfg(not(unix))]
+fn networks() -> Vec<Ipv4Addr> {
+    Vec::new()
 }
 
 /// What a kdj is: "deck A", or "library" for one that only shares (`--serve`).
@@ -681,6 +788,39 @@ mod tests {
         assert_eq!(decode(b"kdj2"), None);
         assert_eq!(decode(b"kdj1M\x90\x24\x7f"), None, "an older kdj's");
         assert_eq!(decode(b"kdj2H\x00\x01"), None, "cut short");
+    }
+
+    #[test]
+    fn a_kdj_on_two_networks_is_one_kdj() {
+        let net = Net::start("kdj-test-here".into(), 1, Some(0)).expect("a socket");
+        let h = Hello {
+            name: "kdj-test-there".into(),
+            first: 1,
+            count: 1,
+            port: 50_123,
+            stamp: 0,
+            controller: true,
+            library: 0,
+            library_stamp: 0,
+            using: Vec::new(),
+        };
+        let cable = SocketAddr::from(([169, 254, 9, 9], PORT));
+        let wifi = SocketAddr::from(([10, 9, 9, 9], PORT));
+        assert!(net.heard(h.clone(), cable), "found");
+        assert!(!net.heard(h.clone(), wifi), "the same kdj, heard on Wi-Fi too");
+        let there = |net: &Net| net.peers().into_iter().filter(|p| p.name == h.name).count();
+        assert_eq!(there(&net), 1);
+        assert!(net.knows(cable.ip()) && net.knows(wifi.ip()), "takes controls from either");
+        let to = |net: &Net| net.state().peers.iter().find(|p| p.hello.name == h.name).map(|p| p.addr.ip());
+        assert_eq!(to(&net), Some(cable.ip()), "kept while its hellos come from there");
+        // The cable goes quiet; its hellos still come over Wi-Fi.
+        if let Some(p) = net.state().peers.iter_mut().find(|p| p.hello.name == h.name) {
+            for (_, at) in &mut p.ips {
+                *at -= ADDR_TIMEOUT;
+            }
+        }
+        net.heard(h.clone(), wifi);
+        assert_eq!(to(&net), Some(wifi.ip()), "controls go where it's still heard");
     }
 
     #[test]

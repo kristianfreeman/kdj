@@ -280,6 +280,9 @@ pub fn silent(mut engines: Vec<Engine>, mut hook: Option<Box<dyn BlockHook>>, sa
 /// counting what it takes against the wall clock for a few seconds shows it.
 #[derive(Debug, Default)]
 pub struct ClockCheck {
+    /// The first callback, and the last.
+    first: Option<Instant>,
+    last: Option<Instant>,
     since: Option<Instant>,
     frames: u64,
     done: bool,
@@ -288,6 +291,11 @@ pub struct ClockCheck {
 impl ClockCheck {
     /// How long to count for.
     const OVER: std::time::Duration = std::time::Duration::from_secs(5);
+    /// Not counted: the start (the card's buffer filling, the deck starting
+    /// up around it), and a stall (an underrun refills the buffer). Neither
+    /// is the clock.
+    const WARM_UP: std::time::Duration = std::time::Duration::from_secs(3);
+    const STALL: std::time::Duration = std::time::Duration::from_millis(100);
     /// How far off counts as wrong (a clock is off by far more, or not at all).
     const TOLERANCE: f64 = 0.05;
 
@@ -297,7 +305,15 @@ impl ClockCheck {
         if self.done {
             return None;
         }
-        // From the second callback: the first also fills the card's buffer.
+        let first = *self.first.get_or_insert(now);
+        let stalled = self.last.is_some_and(|last| now.duration_since(last) > Self::STALL);
+        self.last = Some(now);
+        if stalled || now.duration_since(first) < Self::WARM_UP {
+            self.since = None;
+            self.frames = 0;
+            return None;
+        }
+        // From the next callback: this one's frames were taken before it.
         let Some(since) = self.since else {
             self.since = Some(now);
             return None;
@@ -320,9 +336,9 @@ mod tests {
 
     use super::*;
 
-    /// 128-frame callbacks for `secs` of wall time, at `per_sec` frames a second.
-    fn run(check: &mut ClockCheck, per_sec: u64, secs: u64) -> Option<f64> {
-        let t0 = Instant::now();
+    /// 128-frame callbacks for `secs` of wall time from `t0`, at `per_sec`
+    /// frames a second.
+    fn run_from(check: &mut ClockCheck, t0: Instant, per_sec: u64, secs: u64) -> Option<f64> {
         let mut found = None;
         for i in 0..=per_sec * secs / 128 {
             let at = t0 + Duration::from_nanos(i * 128 * 1_000_000_000 / per_sec);
@@ -333,16 +349,35 @@ mod tests {
         found
     }
 
+    fn run(check: &mut ClockCheck, per_sec: u64, secs: u64) -> Option<f64> {
+        run_from(check, Instant::now(), per_sec, secs)
+    }
+
     #[test]
     fn a_card_at_its_rate_passes() {
-        assert_eq!(run(&mut ClockCheck::default(), 48_000, 6), None);
+        assert_eq!(run(&mut ClockCheck::default(), 48_000, 10), None);
     }
 
     #[test]
     fn a_card_at_double_speed_is_caught_once() {
         let mut check = ClockCheck::default();
-        let ratio = run(&mut check, 96_000, 6).expect("caught");
+        let ratio = run(&mut check, 96_000, 10).expect("caught");
         assert!((ratio - 2.0).abs() < 0.01, "{ratio}");
-        assert_eq!(run(&mut check, 96_000, 6), None, "said once");
+        assert_eq!(run(&mut check, 96_000, 10), None, "said once");
+    }
+
+    #[test]
+    fn a_slow_start_and_a_stall_are_not_the_clock() {
+        let mut check = ClockCheck::default();
+        let t0 = Instant::now();
+        // Starting up: callbacks bunched up, twice as many as the time.
+        assert_eq!(run_from(&mut check, t0, 96_000, 2), None);
+        assert_eq!(run_from(&mut check, t0 + Duration::from_secs(2), 48_000, 3), None);
+        // A stall, then the card's buffer (16 callbacks) refilled at once.
+        let t1 = t0 + Duration::from_millis(5300);
+        for _ in 0..16 {
+            assert_eq!(check.add(128, t1, 48_000), None);
+        }
+        assert_eq!(run_from(&mut check, t1, 48_000, 10), None);
     }
 }
