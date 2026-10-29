@@ -877,7 +877,6 @@ fn run() -> Result<()> {
         lost: false,
         logged: Instant::now(),
         rt_logged: false,
-        clock: audio::ClockCheck::default(),
         looked: Instant::now(),
     };
     // Without vsync, pace the loop to about 60 fps instead of spinning a core.
@@ -906,7 +905,7 @@ fn run() -> Result<()> {
             app.take_loaded(loaded);
         }
         frames.loaded |= app.settle_loads();
-        audio_watch.take_stats(&mut app, &mut audio, sample_rate);
+        AudioWatch::take_stats(&mut app, &mut audio, sample_rate);
         audio_watch.check(&mut app, &audio);
         if silent && audio_watch.sound_card_arrived(&args) {
             return Ok(());
@@ -1007,8 +1006,6 @@ struct AudioWatch {
     logged: Instant,
     /// The audio thread's realtime status was logged.
     rt_logged: bool,
-    /// Whether the sound card keeps time.
-    clock: audio::ClockCheck,
     /// Playing silent (no sound card): when it was last looked for.
     looked: Instant,
 }
@@ -1016,17 +1013,11 @@ struct AudioWatch {
 impl AudioWatch {
     const LOST: &str = "Audio device lost";
 
-    /// What the audio side counted: for the HUD, and the clock check.
-    fn take_stats(&mut self, app: &mut App, audio: &mut audio::Audio, sample_rate: u32) {
+    /// What the audio side counted, for the HUD. (Whether the sound card
+    /// keeps time is kdj-dac's business, at boot on the Pi.)
+    fn take_stats(app: &mut App, audio: &mut audio::Audio, sample_rate: u32) {
         while let Ok(s) = audio.stats.pop() {
             app.hud.callback(s, sample_rate);
-            // For the log only: on the Pi, kdj-dac puts the clock right at
-            // boot, so this is for a set-up it couldn't (or a new board).
-            if let Some(ratio) = self.clock.add(s.frames, Instant::now(), sample_rate) {
-                eprintln!(
-                    "audio: the sound card runs {ratio:.2}× too fast (its clock setting; kdj-dac fixes a Pi's at boot)"
-                );
-            }
         }
     }
 
