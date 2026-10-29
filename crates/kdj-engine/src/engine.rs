@@ -29,6 +29,8 @@ const FADE: usize = 64;
 const FINE_STEP_NARROW: f64 = 0.02;
 const FINE_STEP_WIDE: f64 = 0.05;
 const COARSE_STEP: f64 = 1.0;
+/// A fine tempo fader's range, in percent either way.
+const FINE_RANGE: f64 = 1.0;
 const GRID_NUDGE_SECS: f64 = 0.002;
 const BPM_STEP: f64 = 0.01;
 /// How far a nudge moves the playhead while paused, in beats.
@@ -100,6 +102,10 @@ struct LinkState {
     locked: bool,
     /// Our beat against the timeline's at the start of this block.
     phase: Option<f64>,
+    /// Beats this deck has been nudged off the timeline while following:
+    /// SYNC holds it there instead of pulling it back (a grid a few ms off
+    /// stays fixed). Cleared by SYNC, MASTER, or a new track.
+    offset: f64,
 }
 
 /// What a deck on MASTER tells the timeline.
@@ -214,6 +220,7 @@ enum Input {
     Action(Action, Edge),
     /// The tempo fader's position, -1 (slowest) to 1 (fastest).
     TempoFader(f64),
+    FineFader(f64),
 }
 
 /// A queue of actions from another thread (e.g. MIDI), straight to the engine.
@@ -234,6 +241,12 @@ impl InputSender {
     /// (across the tempo range).
     pub fn tempo_fader(&mut self, position: f64) -> bool {
         self.0.push(Input::TempoFader(position)).is_ok()
+    }
+
+    /// A fine tempo fader moved to `position`: -1 to 1 across ±1%, on top
+    /// of the tempo fader.
+    pub fn fine_fader(&mut self, position: f64) -> bool {
+        self.0.push(Input::FineFader(position)).is_ok()
     }
 }
 
@@ -296,6 +309,8 @@ pub struct Engine {
     heard_fed: f64,
     cue: f64,
     tempo_pct: f64,
+    /// The fine tempo fader's, on top of `tempo_pct`.
+    fine_pct: f64,
     fader: Fader,
     wide_range: bool,
     keylock: bool,
@@ -323,6 +338,7 @@ impl std::fmt::Debug for Engine {
             .field("pos", &self.pos)
             .field("feed", &self.feed)
             .field("tempo_pct", &self.tempo_pct)
+            .field("fine_pct", &self.fine_pct)
             .field("keylock", &self.keylock)
             .field("looping", &self.looping)
             .field("clock", &self.clock)
@@ -359,6 +375,7 @@ impl Engine {
             heard_fed: 0.0,
             cue: 0.0,
             tempo_pct: 0.0,
+            fine_pct: 0.0,
             fader: Fader::default(),
             wide_range: false,
             keylock: true,
@@ -413,6 +430,7 @@ impl Engine {
             self.link.mode = SyncMode::Follow;
             self.link.align_pending = false;
             self.link.locked = false;
+            self.link.offset = 0.0;
         }
     }
 
@@ -460,6 +478,7 @@ impl Engine {
                 match input {
                     Input::Action(a, e) => self.input(a, e),
                     Input::TempoFader(p) => self.tempo_fader(p),
+                    Input::FineFader(p) => self.fine_fader(p),
                 }
             }
         }
@@ -511,7 +530,11 @@ impl Engine {
     /// Account for `n` rendered frames and publish the new state.
     fn advance_clock(&mut self, n: usize) {
         if self.playing {
-            self.nudge.advance(frames_f64(n) / f64::from(self.grid.sample_rate));
+            let secs = frames_f64(n) / f64::from(self.grid.sample_rate);
+            if self.link.rate.is_some() {
+                self.link.offset += self.nudge.bend() * secs * self.grid.bpm / 60.0;
+            }
+            self.nudge.advance(secs);
         } else {
             self.nudge.settle();
         }
@@ -529,7 +552,7 @@ impl Engine {
     }
 
     fn base_rate(&self) -> f64 {
-        self.link.rate.unwrap_or(1.0 + self.tempo_pct / 100.0)
+        self.link.rate.unwrap_or(1.0 + (self.tempo_pct + self.fine_pct) / 100.0)
     }
 
     /// On SYNC: match the timeline's tempo, line the bars up when starting
@@ -548,10 +571,12 @@ impl Engine {
             return;
         };
         let quantum = self.sync_quantum();
-        let f = sync::follow(self.grid.beat_at(self.here()), self.grid.bpm, &tl, quantum.unwrap_or(QUANTUM));
+        let beat = self.grid.beat_at(self.here()) - self.link.offset;
+        let f = sync::follow(beat, self.grid.bpm, &tl, quantum.unwrap_or(QUANTUM));
         self.link.locked = true;
-        // The readout shows the synced tempo, and keeps it if SYNC goes off.
-        self.tempo_pct = (f.base_rate - 1.0) * 100.0;
+        // The readout shows the synced tempo, and keeps it if SYNC goes off
+        // (the fine fader, ignored meanwhile, then counts again from there).
+        self.tempo_pct = (f.base_rate - 1.0).mul_add(100.0, -self.fine_pct);
         self.fader.engaged = false;
         if quantum.is_none() {
             self.link.error = 0.0;
@@ -710,6 +735,7 @@ impl Engine {
         }
         self.preview = None;
         self.looping = None;
+        self.link.offset = 0.0;
         self.hot_cues = self.track.as_ref().map_or([None; HOT_CUES], |t| t.hot_cues);
         // Park on the load cue, like a CDJ.
         self.cue = self.track.as_ref().and_then(|t| t.load_cue).unwrap_or(0.0).max(0.0);
@@ -764,7 +790,12 @@ impl Engine {
             Action::TempoDown => self.set_tempo(self.tempo_pct - self.fine_step()),
             Action::TempoUpCoarse => self.set_tempo(self.tempo_pct + COARSE_STEP),
             Action::TempoDownCoarse => self.set_tempo(self.tempo_pct - COARSE_STEP),
-            Action::TempoReset => self.set_tempo(0.0),
+            Action::TempoReset => {
+                // To 0 with the fine fader where it is (it's a fader: it
+                // stays put), not to the nearest step.
+                self.fader.engaged = false;
+                self.tempo_pct = -self.fine_pct;
+            }
             Action::TempoRange => {
                 self.wide_range = !self.wide_range;
                 let range = self.tempo_range();
@@ -772,8 +803,8 @@ impl Engine {
             }
             Action::JogForward => self.jog(1.0),
             Action::JogBack => self.jog(-1.0),
-            Action::PhaseForward => self.shift(self.phase_step()),
-            Action::PhaseBack => self.shift(-self.phase_step()),
+            Action::PhaseForward => self.phase(1.0),
+            Action::PhaseBack => self.phase(-1.0),
             Action::KeyLock => self.keylock = !self.keylock,
             Action::Lock => self.locked = true,
             Action::Unlock => self.locked = false,
@@ -781,9 +812,11 @@ impl Engine {
             Action::Sync => {
                 self.link.mode = if self.link.mode == SyncMode::Follow { SyncMode::Off } else { SyncMode::Follow };
                 self.link.locked = false;
+                self.link.offset = 0.0;
             }
             Action::Master => {
                 self.link.mode = if self.link.mode == SyncMode::Lead { SyncMode::Off } else { SyncMode::Lead };
+                self.link.offset = 0.0;
                 self.link.align_pending = self.link.mode == SyncMode::Lead;
             }
             Action::GridAnchorHere
@@ -925,6 +958,15 @@ impl Engine {
         }
     }
 
+    /// Step the phase by a few milliseconds; on SYNC, it holds the new phase.
+    fn phase(&mut self, dir: f64) {
+        let step = dir * self.phase_step();
+        self.shift(step);
+        if self.link.rate.is_some() {
+            self.link.offset += step / self.grid.period();
+        }
+    }
+
     /// One phase step, in frames.
     fn phase_step(&self) -> f64 {
         self.nudge.cfg.step_secs * f64::from(self.grid.sample_rate)
@@ -959,6 +1001,15 @@ impl Engine {
             self.fader.engaged = true;
             let step = self.fine_step();
             self.tempo_pct = (target / step).round() * step;
+        }
+    }
+
+    /// The fine tempo fader moved: ±`FINE_RANGE` on top of the tempo, in
+    /// hundredths of a percent. On SYNC, sync owns the tempo; it counts
+    /// again from where SYNC leaves it.
+    fn fine_fader(&mut self, pos: f64) {
+        if pos.is_finite() {
+            self.fine_pct = (pos.clamp(-1.0, 1.0) * FINE_RANGE * 100.0).round() / 100.0;
         }
     }
 
@@ -1037,7 +1088,7 @@ impl Engine {
             previewing: self.preview.is_some(),
             cue: self.cue,
             hot_cues: self.hot_cues,
-            tempo_pct: self.tempo_pct,
+            tempo_pct: self.tempo_pct + self.fine_pct,
             fader: self.fader.pos.filter(|_| !self.fader.engaged).map(|p| p * self.tempo_range()),
             wide_range: self.wide_range,
             keylock: self.keylock,

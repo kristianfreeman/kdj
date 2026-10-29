@@ -23,7 +23,8 @@ pub enum Action {
     /// throw a track off).
     Lock,
     Unlock,
-    /// Tempo bend while held, building the longer it's held. When paused,
+    /// A ~10 ms push, like flicking a jog wheel; held, it keeps pushing,
+    /// building. On SYNC the deck holds where it's pushed. When paused,
     /// steps the playhead instead.
     NudgeForward,
     NudgeBack,
@@ -163,11 +164,10 @@ impl Action {
             Self::KeyLock => "KEY",
             Self::Lock => "LOCK",
             Self::Unlock => "UNLOCK",
-            // A tap's push is the nudge on the controller; holding to bend is the bend.
-            Self::NudgeForward => "BEND →",
-            Self::NudgeBack => "← BEND",
-            Self::JogForward => "NUDGE →",
-            Self::JogBack => "← NUDGE",
+            Self::NudgeForward => "NUDGE →",
+            Self::NudgeBack => "← NUDGE",
+            Self::JogForward => "JOG →",
+            Self::JogBack => "← JOG",
             Self::PhaseForward => "PHASE +",
             Self::PhaseBack => "PHASE −",
             Self::Quantize => "QUANTIZE",

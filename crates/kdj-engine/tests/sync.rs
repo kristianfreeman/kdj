@@ -203,6 +203,41 @@ fn a_beat_jump_on_a_synced_deck_moves_exactly_that_far() -> Result<()> {
     Ok(())
 }
 
+/// A grid a few ms off sounds off even on SYNC: a nudge fixes it, and SYNC
+/// holds the new phase instead of pulling it back. SYNC again clears it.
+#[test]
+fn a_nudge_on_a_synced_deck_stays() -> Result<()> {
+    let mut deck = Deck::new(134.0)?;
+    let mut link = session(134.0, 0.0);
+    deck.press(Action::Sync, Some(&mut link));
+    link.tick();
+    let ms = |deck: &Deck, s: &Snapshot, link: &LocalSession| {
+        phase_error(deck.beat(s), link.beat()) * 60.0 / 134.0 * 1000.0
+    };
+    let s = run(&mut deck, &mut link, 2.0);
+    let start = ms(&deck, &s, &link);
+    assert!(start.abs() < 1.0, "locked: {start:.1} ms");
+    for _ in 0..2 {
+        deck.handle.send(Action::NudgeForward, Edge::Press);
+        run(&mut deck, &mut link, 0.1);
+        deck.handle.send(Action::NudgeForward, Edge::Release);
+        run(&mut deck, &mut link, 1.0);
+    }
+    deck.press(Action::PhaseBack, Some(&mut link));
+    link.tick();
+    let s = run(&mut deck, &mut link, 4.0);
+    let held = ms(&deck, &s, &link) - start;
+    assert!((16.0..20.0).contains(&held), "two taps on, a step back, and held: {held:.1} ms");
+    deck.press(Action::Sync, Some(&mut link));
+    link.tick();
+    deck.press(Action::Sync, Some(&mut link));
+    link.tick();
+    let s = run(&mut deck, &mut link, 4.0);
+    let back = ms(&deck, &s, &link);
+    assert!(back.abs() < 1.0, "SYNC again lines it back up: {back:.1} ms");
+    Ok(())
+}
+
 #[test]
 fn an_absurd_session_tempo_never_breaks_the_audio() -> Result<()> {
     for (bpm, max_block) in [(999.0, 1024), (1.0, 1024), (175.0, 4096)] {

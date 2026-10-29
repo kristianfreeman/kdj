@@ -120,9 +120,12 @@ impl Dispatch {
         }
         match event {
             Event::Hit(hit) => self.hit(hit, deck, self.is_encoder(msg)),
-            Event::Fader { kind: FaderKind::Tempo, position, .. } => {
+            Event::Fader { kind, position, .. } => {
                 if let Some(engine) = self.decks.get_mut(deck) {
-                    engine.tempo_fader(position);
+                    match kind {
+                        FaderKind::Tempo => engine.tempo_fader(position),
+                        FaderKind::FineTempo => engine.fine_fader(position),
+                    };
                 }
             }
             Event::Modifier { .. } => {}

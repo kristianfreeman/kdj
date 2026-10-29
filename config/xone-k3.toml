@@ -16,7 +16,7 @@
 #   │ SYNC         MASTER      │ SYNC         MASTER      │ row 1
 #   │ ◀ JUMP       JUMP ▶      │ ◀ JUMP       JUMP ▶      │ row 2
 #   │ LOCK (⇧ off) KEY LOCK    │ LOCK (⇧ off) KEY LOCK    │ row 3
-#   │ TEMPO        —           │ TEMPO        —           │ faders
+#   │ TEMPO        FINE TEMPO  │ TEMPO        FINE TEMPO  │ faders
 #   │ HOT CUE A    B           │ HOT CUE A    B           │ grid 1
 #   │ HOT CUE C    D           │ HOT CUE C    D           │ grid 2
 #   │ ◀ NUDGE      NUDGE ▶     │ ◀ NUDGE      NUDGE ▶     │ grid 3
@@ -114,13 +114,20 @@ deck = 0
 note = 41
 action = "KeyLock"
 
-# --- Fader 1 (CC 16): tempo, soft takeover. Fader 2 (CC 17) unused.
+# --- Fader 1 (CC 16): tempo, soft takeover. Fader 2 (CC 17): fine tempo,
+# ±1% on top, to match by ear what fader 1 gets close to.
 
 [[midi.map]]
 channel = 15
 deck = 0
 cc = 16
 fader = "Tempo"
+
+[[midi.map]]
+channel = 15
+deck = 0
+cc = 17
+fader = "FineTempo"
 
 # --- Grid (notes 36-37, 32-33, 28-29, 24-25): hot cues, nudge, CUE and PLAY.
 
@@ -148,18 +155,19 @@ deck = 0
 note = 33
 action = "HotCue4"
 
-# a tap: a short push, like touching a jog wheel
+# a tap: a ~10 ms push, like flicking a jog wheel; held: keeps pushing.
+# On SYNC the deck stays where it's pushed (SYNC again lines it back up).
 [[midi.map]]
 channel = 15
 deck = 0
 note = 28
-action = "JogBack"
+action = "NudgeBack"
 
 [[midi.map]]
 channel = 15
 deck = 0
 note = 29
-action = "JogForward"
+action = "NudgeForward"
 
 [[midi.map]]
 channel = 15
@@ -266,6 +274,12 @@ fader = "Tempo"
 [[midi.map]]
 channel = 15
 deck = 1
+cc = 19
+fader = "FineTempo"
+
+[[midi.map]]
+channel = 15
+deck = 1
 note = 38
 action = "HotCue1"
 
@@ -291,13 +305,13 @@ action = "HotCue4"
 channel = 15
 deck = 1
 note = 30
-action = "JogBack"
+action = "NudgeBack"
 
 [[midi.map]]
 channel = 15
 deck = 1
 note = 31
-action = "JogForward"
+action = "NudgeForward"
 
 [[midi.map]]
 channel = 15

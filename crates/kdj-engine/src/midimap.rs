@@ -112,6 +112,9 @@ pub enum Modifier {
 pub enum FaderKind {
     /// Tempo across the deck's range, with soft takeover.
     Tempo,
+    /// Fine tempo: ±1% on top of the tempo fader, to match by ear what the
+    /// tempo fader gets close to.
+    FineTempo,
 }
 
 /// How relative encoders say which way they turned.
@@ -411,7 +414,7 @@ mod tests {
         // tempo up; its push resets it. The grid's third row nudges.
         assert_eq!(on(&[0xbe, 0, 1]), Some((Action::TempoUp, Target::Deck(0))));
         assert_eq!(on(&[0x9e, 52, 127]), Some((Action::TempoReset, Target::Deck(0))));
-        assert_eq!(on(&[0x9e, 31, 127]), Some((Action::JogForward, Target::Deck(1))));
+        assert_eq!(on(&[0x9e, 31, 127]), Some((Action::NudgeForward, Target::Deck(1))));
         // LOCK, and SHIFT + LOCK unlocks; LAYER and SHIFT are SHIFT.
         let lock = hit(&m, &[0x9e, 40, 127]).expect("LOCK");
         assert_eq!((lock.action, lock.shifted), (Action::Lock, Some(Action::Unlock)));
@@ -426,6 +429,10 @@ mod tests {
         assert!(matches!(
             m.decode(&[0xbe, 18, 0]),
             Some(Event::Fader { kind: FaderKind::Tempo, target: Target::Deck(1), .. })
+        ));
+        assert!(matches!(
+            m.decode(&[0xbe, 19, 0]),
+            Some(Event::Fader { kind: FaderKind::FineTempo, target: Target::Deck(1), .. })
         ));
         // Every control is on channel 15, a deck's (SHIFT is both's), and
         // mapped once.

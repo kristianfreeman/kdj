@@ -1,7 +1,8 @@
 //! Nudging: pushing a playing deck's phase into line with another.
 //!
-//! - Hold: bends tempo while held, starting gentle and building, so a tap is
-//!   a small correction and a hold catches up a big drift.
+//! - Push (a NUDGE button): a press is a quick push of about 10 ms, like
+//!   flicking a jog wheel, so a few taps fix a flam you can hear. Held past
+//!   a moment it keeps pushing, building, to catch up a big drift.
 //! - Jog: each tick (an encoder detent, a key repeat) adds a little speed that
 //!   decays away, like touching the edge of a jog wheel.
 //! - Step: an instant shift by a few milliseconds (handled by the engine as a
@@ -9,7 +10,12 @@
 
 #[derive(Clone, Copy, Debug)]
 pub struct NudgeConfig {
-    /// Bend when a hold starts, as a fraction of speed (0.01 = 1%).
+    /// Speed a press adds, decaying like a jog tick's, as a fraction of
+    /// speed (0.01 = 1%).
+    pub push: f64,
+    /// Held this long, a press keeps pushing.
+    pub hold_after_secs: f64,
+    /// Bend when it starts to, as a fraction of speed.
     pub hold_start: f64,
     /// Bend after holding for `hold_ramp_secs`.
     pub hold_max: f64,
@@ -26,10 +32,12 @@ pub struct NudgeConfig {
 
 impl Default for NudgeConfig {
     fn default() -> Self {
-        // A 0.3 s tap moves ~3 ms; a 1 s hold ~25 ms; a jog tick ~1 ms.
+        // A tap moves ~10 ms; a 1 s hold ~30 ms, 2 s ~90 ms; a jog tick ~1 ms.
         Self {
-            hold_start: 0.01,
-            hold_max: 0.04,
+            push: 0.05,
+            hold_after_secs: 0.3,
+            hold_start: 0.02,
+            hold_max: 0.06,
             hold_ramp_secs: 1.0,
             jog_impulse: 0.005,
             jog_decay_secs: 0.2,
@@ -55,6 +63,9 @@ impl Nudge {
     }
 
     pub fn hold(&mut self, dir: f64, held: bool) {
+        if held {
+            self.jog = dir.mul_add(self.cfg.push, self.jog);
+        }
         if dir > 0.0 {
             self.forward = held;
         } else {
@@ -71,8 +82,13 @@ impl Nudge {
     #[must_use]
     pub fn bend(&self) -> f64 {
         let dir = i8::from(self.forward) - i8::from(self.back);
-        let ramp = (self.held_secs / self.cfg.hold_ramp_secs).min(1.0);
-        let hold = f64::from(dir) * (self.cfg.hold_max - self.cfg.hold_start).mul_add(ramp, self.cfg.hold_start);
+        let holding = self.held_secs - self.cfg.hold_after_secs;
+        let ramp = (holding / self.cfg.hold_ramp_secs).min(1.0);
+        let hold = if holding < 0.0 {
+            0.0
+        } else {
+            f64::from(dir) * (self.cfg.hold_max - self.cfg.hold_start).mul_add(ramp, self.cfg.hold_start)
+        };
         (hold + self.jog).clamp(-self.cfg.max_bend, self.cfg.max_bend)
     }
 
@@ -115,15 +131,19 @@ mod tests {
     }
 
     #[test]
-    fn a_tap_is_small_and_a_hold_is_large() {
+    fn a_tap_moves_about_ten_ms_and_a_hold_keeps_going() {
         let mut n = Nudge::new(NudgeConfig::default());
         n.hold(1.0, true);
-        let tap = phase_moved(&mut n, 0.3);
-        assert!((0.003..0.006).contains(&tap), "tap moved {:.1} ms", tap * 1000.0);
+        let mut tap = phase_moved(&mut n, 0.15);
+        n.hold(1.0, false);
+        tap += phase_moved(&mut n, 2.0);
+        assert!((0.009..0.011).contains(&tap), "tap moved {:.1} ms", tap * 1000.0);
         let mut n = Nudge::new(NudgeConfig::default());
-        n.hold(1.0, true);
+        n.hold(-1.0, true);
         let hold = phase_moved(&mut n, 1.0);
-        assert!((0.02..0.03).contains(&hold), "hold moved {:.1} ms", hold * 1000.0);
+        assert!((-0.035..-0.025).contains(&hold), "1 s hold moved {:.1} ms", hold * 1000.0);
+        let hold = hold + phase_moved(&mut n, 1.0);
+        assert!((-0.1..-0.08).contains(&hold), "2 s hold moved {:.1} ms", hold * 1000.0);
     }
 
     #[test]
@@ -136,11 +156,12 @@ mod tests {
     }
 
     #[test]
-    fn releasing_stops_the_bend() {
+    fn releasing_stops_pushing() {
         let mut n = Nudge::new(NudgeConfig::default());
         n.hold(-1.0, true);
-        phase_moved(&mut n, 0.5);
+        phase_moved(&mut n, 1.5);
         n.hold(-1.0, false);
-        assert!(n.bend().abs() < f64::EPSILON);
+        phase_moved(&mut n, 2.0);
+        assert!(n.bend().abs() < 1e-4, "only the press's push was left, and it's gone");
     }
 }

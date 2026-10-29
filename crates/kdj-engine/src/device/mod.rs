@@ -331,6 +331,7 @@ fn part(b: &Binding) -> Option<Part> {
         (Some(a), None, None, None) => a.label().to_owned(),
         (None, Some(up), Some(down), None) => Action::pair_label(up, down),
         (None, None, None, Some(FaderKind::Tempo)) => "TEMPO".to_owned(),
+        (None, None, None, Some(FaderKind::FineTempo)) => "FINE TEMPO".to_owned(),
         _ => return None,
     };
     Some(Part { label, target: b.deck.map_or(Target::Focused, Target::Deck), both: b.modifier.is_some() })
@@ -410,8 +411,9 @@ mod tests {
             [x(Address::Note(12)), x(Address::Cc(20)), x(Address::Cc(21)), x(Address::Note(15))],
             [0.0, 1.0, 2.0, 3.0].map(Some)
         );
-        // The pots and the second faders do nothing.
-        for cc in (4..=15).chain([17, 19]) {
+        assert_eq!(main(&d, Address::Cc(19)), Some(("FINE TEMPO", Target::Deck(1))), "fader 2");
+        // The pots do nothing.
+        for cc in 4..=15 {
             assert_eq!(main(&d, Address::Cc(cc)), None, "CC {cc}");
         }
     }

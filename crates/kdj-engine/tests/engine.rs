@@ -216,14 +216,15 @@ fn tempo_steps_clamp_to_range() {
 }
 
 #[test]
-fn nudge_bends_only_while_held_and_builds() {
+fn a_nudge_press_pushes_then_keeps_pushing_while_held() {
     let mut rig = Rig::new(true);
     rig.press(Action::PlayPause);
     let s = rig.hold(Action::NudgeForward);
-    assert!(s.rate > 1.0099 && s.rate < 1.011, "starts gentle: {}", s.rate);
-    let s = rig.run_secs(1.0);
-    assert!((s.rate - 1.04).abs() < 1e-3, "builds to 4%: {}", s.rate);
-    let s = rig.release(Action::NudgeForward);
+    assert!(s.rate > 1.04 && s.rate < 1.051, "a push, like a jog flick: {}", s.rate);
+    let s = rig.run_secs(1.5);
+    assert!((s.rate - 1.06).abs() < 2e-3, "held, builds to 6%: {}", s.rate);
+    rig.release(Action::NudgeForward);
+    let s = rig.run_secs(2.0);
     assert!(same(s.rate, 1.0), "{}", s.rate);
 }
 
@@ -453,4 +454,22 @@ fn a_tempo_fader_takes_over_only_once_it_reaches_the_tempo() {
     assert!(same(fader(&mut rig, -1.0).tempo_pct, 0.0));
     assert!(same(fader(&mut rig, 0.0).tempo_pct, 0.0), "reached it");
     assert!(same(fader(&mut rig, 0.5).tempo_pct, 0.5));
+}
+
+#[test]
+fn the_fine_fader_adds_up_to_a_percent_and_reset_still_means_zero() {
+    let mut rig = Rig::new(true);
+    rig.press(Action::PlayPause);
+    rig.press(Action::TempoUpCoarse);
+    rig.controller.fine_fader(-0.5);
+    let s = rig.run(1);
+    assert!(same(s.tempo_pct, 0.5), "+1% and -0.5%: {}", s.tempo_pct);
+    assert!(same(s.rate, 1.005), "{}", s.rate);
+    rig.controller.fine_fader(0.37);
+    assert!(same(rig.run(1).tempo_pct, 1.37), "in hundredths of a percent");
+    // The fine fader stays where it is: reset leaves the tempo at 0 with it.
+    let s = rig.press(Action::TempoReset);
+    assert!(same(s.tempo_pct, 0.0) && same(s.rate, 1.0), "{} {}", s.tempo_pct, s.rate);
+    rig.controller.fine_fader(1.0);
+    assert!(same(rig.run(1).tempo_pct, 0.63), "and it counts from there");
 }
