@@ -64,6 +64,13 @@ pub fn leds(cfg: &MidiConfig) -> Vec<Led> {
         .collect()
 }
 
+/// Early in a beat: its first quarter, or half on a bar's first beat.
+fn on_the_beat(s: &Snapshot) -> bool {
+    let beat = s.grid.beat_at(s.pos);
+    let into = beat - beat.floor();
+    into < if beat.rem_euclid(4.0) < 1.0 { 0.5 } else { 0.25 }
+}
+
 /// Whether `action` has an on state to show.
 #[must_use]
 pub fn has_state(action: Action) -> bool {
@@ -83,7 +90,9 @@ pub fn lit(action: Action, s: &Snapshot) -> Option<bool> {
         return Some(s.loop_active && this_size);
     }
     Some(match action {
-        Action::PlayPause => s.playing && !s.previewing,
+        // Playing: a flash on every beat, longer on the bar's first.
+        Action::PlayPause => s.playing && !s.previewing && on_the_beat(s),
+        Action::Lock => s.locked,
         // At the cue point (or previewing it), as the screen's CUE shows.
         Action::Cue => s.previewing || (!s.playing && s.track_frames > 0 && (s.pos - s.cue).abs() < 1.0),
         Action::Sync => s.sync == SyncMode::Follow,

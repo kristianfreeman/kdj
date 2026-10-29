@@ -23,6 +23,15 @@
 //! note = 36
 //! action = "Cue"
 //! deck = 1
+//!
+//! [[midi.map]]               # a modifier: while it's held, buttons with a
+//! note = 15                  # `shift` action do that instead
+//! modifier = "Shift"
+//!
+//! [[midi.map]]
+//! note = 42
+//! action = "Lock"
+//! shift = "Unlock"
 //! ```
 
 use std::collections::HashMap;
@@ -62,6 +71,12 @@ pub struct Binding {
     /// For buttons.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<Action>,
+    /// For buttons: what it does instead while a modifier (SHIFT) is held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shift: Option<Action>,
+    /// This button is a modifier rather than an action: SHIFT.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modifier: Option<Modifier>,
     /// For encoders: per clockwise / anticlockwise tick.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub up: Option<Action>,
@@ -83,6 +98,13 @@ pub struct Binding {
     /// The note that lights this button's LED, if not its own note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub led: Option<u8>,
+}
+
+/// A button that changes what others do while it's held.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub enum Modifier {
+    /// Buttons with a `shift` action do that instead.
+    Shift,
 }
 
 /// What a fader controls.
@@ -115,6 +137,8 @@ pub enum Target {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Hit {
     pub action: Action,
+    /// What it does instead with SHIFT held, if anything different.
+    pub shifted: Option<Action>,
     pub edge: Edge,
     pub target: Target,
     pub repeat: u8,
@@ -130,6 +154,11 @@ pub enum Event {
         position: f64,
         target: Target,
     },
+    /// A modifier went down or up.
+    Modifier {
+        modifier: Modifier,
+        held: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -140,7 +169,8 @@ enum Source {
 
 #[derive(Clone, Copy, Debug)]
 enum Control {
-    Button(Action),
+    Button { action: Action, shift: Option<Action> },
+    Modifier(Modifier),
     Encoder { up: Action, down: Action, encoding: Encoding },
     Fader { kind: FaderKind, invert: bool },
 }
@@ -166,14 +196,20 @@ impl MidiMap {
                 _ => bail!("midi mapping {}: give exactly one of note or cc", i + 1),
             };
             let control = match (b.action, b.up, b.down, b.fader) {
-                (Some(a), None, None, None) => Control::Button(a),
+                _ if b.modifier.is_some() && matches!(source, Source::Note(_)) && b.action.is_none() => {
+                    Control::Modifier(b.modifier.unwrap_or(Modifier::Shift))
+                }
+                (Some(a), None, None, None) => Control::Button { action: a, shift: b.shift },
                 (None, Some(up), Some(down), None) => {
                     Control::Encoder { up, down, encoding: b.encoding.unwrap_or_default() }
                 }
                 (None, None, None, Some(kind)) if matches!(source, Source::Cc(_)) => {
                     Control::Fader { kind, invert: b.invert.unwrap_or(false) }
                 }
-                _ => bail!("midi mapping {}: give one of action, up and down, or fader (on a cc)", i + 1),
+                _ => bail!(
+                    "midi mapping {}: give one of action, up and down, fader (on a cc) or modifier (on a note)",
+                    i + 1
+                ),
             };
             let channel = match b.channel {
                 None => None,
@@ -215,11 +251,12 @@ impl MidiMap {
             self.controls.get(&(Some(channel), source)).or_else(|| self.controls.get(&(None, source)))?;
         match control {
             // Notes: velocity 0 is a release. CCs as buttons: 64 and up is pressed.
-            Control::Button(action) => {
+            Control::Button { action, shift } => {
                 let pressed = if matches!(source, Source::Note(_)) { value > 0 } else { value >= 64 };
                 let edge = if pressed { Edge::Press } else { Edge::Release };
-                Some(Event::Hit(Hit { action, edge, target, repeat: 1 }))
+                Some(Event::Hit(Hit { action, shifted: shift, edge, target, repeat: 1 }))
             }
+            Control::Modifier(modifier) => Some(Event::Modifier { modifier, held: value > 0 }),
             Control::Fader { kind, invert } => Some(Event::Fader { kind, position: fader(value, invert), target }),
             Control::Encoder { up, down, encoding } => {
                 let ticks = ticks(value, encoding);
@@ -227,7 +264,7 @@ impl MidiMap {
                     return None;
                 }
                 let action = if ticks > 0 { up } else { down };
-                Some(Event::Hit(Hit { action, edge: Edge::Press, target, repeat: ticks.unsigned_abs() }))
+                Some(Event::Hit(Hit { action, shifted: None, edge: Edge::Press, target, repeat: ticks.unsigned_abs() }))
             }
         }
     }
@@ -289,7 +326,7 @@ mod tests {
     fn hit(m: &MidiMap, msg: &[u8]) -> Option<Hit> {
         match m.decode(msg)? {
             Event::Hit(h) => Some(h),
-            Event::Fader { .. } => None,
+            Event::Fader { .. } | Event::Modifier { .. } => None,
         }
     }
 
@@ -370,8 +407,18 @@ mod tests {
         assert_eq!(on(&[0x9e, 25, 127]), Some((Action::PlayPause, Target::Deck(0))));
         assert_eq!(on(&[0x9e, 26, 127]), Some((Action::Cue, Target::Deck(1))));
         assert_eq!(on(&[0x9e, 27, 127]), Some((Action::PlayPause, Target::Deck(1))));
-        // Top-left encoder one click clockwise (two's complement 1): jog.
-        assert_eq!(on(&[0xbe, 0, 1]), Some((Action::JogForward, Target::Deck(0))));
+        // Top-left encoder one click clockwise (two's complement 1): fine
+        // tempo up; its push resets it. The grid's third row nudges.
+        assert_eq!(on(&[0xbe, 0, 1]), Some((Action::TempoUp, Target::Deck(0))));
+        assert_eq!(on(&[0x9e, 52, 127]), Some((Action::TempoReset, Target::Deck(0))));
+        assert_eq!(on(&[0x9e, 31, 127]), Some((Action::JogForward, Target::Deck(1))));
+        // LOCK, and SHIFT + LOCK unlocks; LAYER and SHIFT are SHIFT.
+        let lock = hit(&m, &[0x9e, 40, 127]).expect("LOCK");
+        assert_eq!((lock.action, lock.shifted), (Action::Lock, Some(Action::Unlock)));
+        for note in [12, 15] {
+            assert_eq!(m.decode(&[0x9e, note, 127]), Some(Event::Modifier { modifier: Modifier::Shift, held: true }));
+            assert_eq!(m.decode(&[0x9e, note, 0]), Some(Event::Modifier { modifier: Modifier::Shift, held: false }));
+        }
         assert!(matches!(
             m.decode(&[0xbe, 16, 0]),
             Some(Event::Fader { kind: FaderKind::Tempo, target: Target::Deck(0), .. })
@@ -380,10 +427,11 @@ mod tests {
             m.decode(&[0xbe, 18, 0]),
             Some(Event::Fader { kind: FaderKind::Tempo, target: Target::Deck(1), .. })
         ));
-        // Every control is on channel 15, a deck's, and mapped once.
+        // Every control is on channel 15, a deck's (SHIFT is both's), and
+        // mapped once.
         let mut seen = std::collections::HashSet::new();
         for b in &cfg.map {
-            assert!(b.channel == Some(15) && b.deck.is_some(), "not on a deck's side: {b:?}");
+            assert!(b.channel == Some(15) && (b.deck.is_some() || b.modifier.is_some()), "not on a side: {b:?}");
             assert!(seen.insert((b.note, b.cc)), "mapped twice: {b:?}");
         }
         // The sides match: deck B's columns are deck A's plus 2, except the
@@ -397,7 +445,7 @@ mod tests {
             let shifted = Binding { note: a.note.map(|n| n + 2), cc: a.cc.map(|c| c + 2), deck: Some(1), ..a.clone() };
             assert_eq!(*b, shifted);
         }
-        let actions = |deck| side(deck).filter(bottom).map(|b| (b.action, b.up, b.down)).collect::<Vec<_>>();
+        let actions = |deck| side(deck).filter(bottom).map(|b| (b.action, b.shift, b.up, b.down)).collect::<Vec<_>>();
         assert_eq!(actions(0), actions(1));
     }
 

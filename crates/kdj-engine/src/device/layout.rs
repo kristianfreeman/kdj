@@ -267,7 +267,7 @@ fn legend(out: &mut Out, controls: &[Placed], unit: f32, x0: f32) {
     let mut spans: Vec<(Target, f32, f32)> = Vec::new();
     for p in controls {
         let [x, _, cw, _] = p.control.rect;
-        for part in [&p.main, &p.push].into_iter().flatten() {
+        for part in [&p.main, &p.push].into_iter().flatten().filter(|p| !p.both) {
             match spans.iter_mut().find(|s| s.0 == part.target) {
                 Some(s) => (s.1, s.2) = (s.1.min(x), s.2.max(x + cw)),
                 None => spans.push((part.target, x, x + cw)),

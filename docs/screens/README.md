@@ -48,6 +48,10 @@ Every screen of the deck at the panel's own 800×480, drawn by the real UI code 
 
 ![Lending this stick](deck-lending-this-stick.png)
 
+**Locked**: No loading until SHIFT + LOCK: the badge shows only while it's locked.
+
+![Locked](deck-locked.png)
+
 **Tempo fader catching up**: Hollow: where the hardware fader is; solid: the tempo.
 
 ![Tempo fader catching up](deck-tempo-fader-catching-up.png)

@@ -18,6 +18,11 @@ pub enum Action {
     /// Cycle the tempo range between ±8% and ±16%.
     TempoRange,
     KeyLock,
+    /// Lock the deck: loads are refused, playing or not, until `Unlock`
+    /// (on the K3, SHIFT + LOCK: a deliberate press, so a stray one can't
+    /// throw a track off).
+    Lock,
+    Unlock,
     /// Tempo bend while held, building the longer it's held. When paused,
     /// steps the playhead instead.
     NudgeForward,
@@ -156,10 +161,13 @@ impl Action {
             Self::TempoReset => "TEMPO 0",
             Self::TempoRange => "RANGE",
             Self::KeyLock => "KEY",
-            Self::NudgeForward => "NUDGE →",
-            Self::NudgeBack => "← NUDGE",
-            Self::JogForward => "JOG →",
-            Self::JogBack => "← JOG",
+            Self::Lock => "LOCK",
+            Self::Unlock => "UNLOCK",
+            // A tap's push is the nudge on the controller; holding to bend is the bend.
+            Self::NudgeForward => "BEND →",
+            Self::NudgeBack => "← BEND",
+            Self::JogForward => "NUDGE →",
+            Self::JogBack => "← NUDGE",
             Self::PhaseForward => "PHASE +",
             Self::PhaseBack => "PHASE −",
             Self::Quantize => "QUANTIZE",

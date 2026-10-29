@@ -414,6 +414,15 @@ impl Net {
         self.data.send_to(&b[..len], to).is_ok()
     }
 
+    /// Send a controller message to every other kdj (a modifier: SHIFT held
+    /// on the controller here counts for their decks too).
+    pub fn send_midi_all(&self, msg: &[u8]) {
+        let Some((b, len)) = encode(MIDI, msg) else { return };
+        for p in &self.state().peers {
+            let _ = self.data.send_to(&b[..len], p.addr);
+        }
+    }
+
     /// Send an LED message to the kdjs the controller is plugged into.
     pub fn send_led(&self, msg: &[u8]) {
         let Some((b, len)) = encode(LED, msg) else { return };

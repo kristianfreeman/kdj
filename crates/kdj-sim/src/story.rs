@@ -96,6 +96,23 @@ pub fn run(opts: &Opts) -> Result<bool> {
     Ok(true)
 }
 
+/// A deck with a track from another kdj's stick, one lending its stick, and
+/// a locked one.
+fn shared_and_locked_stories(book: &mut Book, track: &Arc<Track>) -> Result<()> {
+    let mut sim = playing(track, 42.0)?;
+    book.screen.ui.view.from = Some("B".into());
+    book.deck("A track from deck B's stick", "Loaded across the network; it plays from memory.", &mut sim, "")?;
+    book.screen.ui.view.from = None;
+    book.screen.ui.view.lending = Some("KRISTIAN in use by B: leave it in".into());
+    book.deck("Lending this stick", "Deck B has a track from the stick in this kdj: bright, not dim.", &mut sim, "")?;
+    book.screen.ui.view.lending = None;
+
+    let mut sim = playing(track, 42.0)?;
+    press(&mut sim, Action::Lock);
+    book.deck("Locked", "No loading until SHIFT + LOCK: the badge shows only while it's locked.", &mut sim, "")?;
+    Ok(())
+}
+
 fn synth(bpm: f64, seed: u32) -> Arc<Track> {
     let spec = SynthSpec { bars: 120, bpm, seed, ..Default::default() };
     Arc::new(analysis::build(format!("Synthetic hardgroove {bpm} bpm"), analysis::synth::render(&spec), SAMPLE_RATE).0)
@@ -171,13 +188,7 @@ fn deck_stories(book: &mut Book) -> Result<()> {
     sim.run_until(42.0);
     book.deck("Alone on Link, not synced", "The phase meter reads against the session.", &mut sim, "")?;
 
-    let mut sim = playing(&track, 42.0)?;
-    book.screen.ui.view.from = Some("B".into());
-    book.deck("A track from deck B's stick", "Loaded across the network; it plays from memory.", &mut sim, "")?;
-    book.screen.ui.view.from = None;
-    book.screen.ui.view.lending = Some("KRISTIAN in use by B: leave it in".into());
-    book.deck("Lending this stick", "Deck B has a track from the stick in this kdj: bright, not dim.", &mut sim, "")?;
-    book.screen.ui.view.lending = None;
+    shared_and_locked_stories(book, &track)?;
 
     let mut sim = playing(&track, 41.0)?;
     if let Some(c) = sim.controller.as_mut() {

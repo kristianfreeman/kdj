@@ -170,6 +170,11 @@ impl Scene {
             f.touch.add([left, 10.0, x - left, 24.0], Target::Action(action));
             x = left - 8.0;
         }
+        // Only while locked, and not a toggle here: unlocking is SHIFT + LOCK
+        // on the controller, never a stray tap.
+        if s.locked {
+            x = badge(f, atlas, x, 10.0, "LOCKED", true) - 8.0;
+        }
         x -= 8.0;
         // Where the track and grid came from, and Link peers: plain text, not
         // toggles. A stick lent to other decks says so instead, brightly.

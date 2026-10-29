@@ -338,6 +338,23 @@ impl Remotes {
 /// What the deck says while it has no sound card to play on.
 const NO_SOUND_CARD: &str = "No sound card";
 
+const STOP_TO_LOAD: &str = "Stop the deck to load";
+
+/// Why a deck won't take a track now, if it won't: it's playing, or locked
+/// (SHIFT + LOCK unlocks it).
+const fn refuses_load(s: &Snapshot) -> Option<&'static str> {
+    if s.locked {
+        Some("Locked")
+    } else if s.playing {
+        Some(STOP_TO_LOAD)
+    } else {
+        None
+    }
+}
+
+/// How long a browse push is held to go back instead of opening or loading.
+const BACK_HOLD: Duration = Duration::from_millis(500);
+
 /// How long a power off / restart press waits for its confirming second press.
 const POWER_CONFIRM: Duration = Duration::from_secs(3);
 
@@ -357,6 +374,8 @@ struct App {
     settings: Settings,
     /// A power off / restart pressed once, waiting for the second press.
     armed: Option<(settings::Key, Instant)>,
+    /// When a browse push went down: let go before `BACK_HOLD`, it loads.
+    load_held: Option<Instant>,
     /// This kdj's own sources, then the other kdjs'.
     libs: Vec<library::Library>,
     /// How many of `libs` are this kdj's own.
@@ -404,6 +423,7 @@ impl App {
             browser: Browser::new(args.track.is_none() && !args.synth),
             settings: Settings::new(settings::pages(&settings::Prefs::default(), info)),
             armed: None,
+            load_held: None,
             libs: Vec::new(),
             own: 0,
             remotes: Remotes::new(),
@@ -454,6 +474,20 @@ impl App {
             self.slots[target].deck.send(a, e);
             return;
         }
+        // A controller's browse encoder has one push: let go, it opens or
+        // loads; held past BACK_HOLD, it backs out instead.
+        if a == Action::BrowseLoad && !self.settings.open {
+            match e {
+                Edge::Press => self.load_held = Some(Instant::now()),
+                Edge::Release => match self.load_held.take() {
+                    Some(t) if t.elapsed() >= BACK_HOLD => self.act(Action::BrowseBack, Edge::Press, target),
+                    Some(_) if !self.browser.open => self.open_browser(),
+                    Some(_) => self.open_selected(Some(target)),
+                    None => {}
+                },
+            }
+            return;
+        }
         if e == Edge::Release {
             return;
         }
@@ -476,6 +510,8 @@ impl App {
                     self.rescan_if_sources_changed();
                 }
             }
+            // Turning the browse encoder with the browser closed opens it.
+            Action::BrowseUp | Action::BrowseDown if !b.open => self.open_browser(),
             Action::BrowseUp => b.move_by(-1),
             Action::BrowseDown => b.move_by(1),
             Action::BrowsePageUp => b.move_by(-browser::ROWS.cast_signed()),
@@ -497,6 +533,11 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn open_browser(&mut self) {
+        self.browser.open = true;
+        self.rescan_if_sources_changed();
     }
 
     /// The browser's keys, on the settings screen. False for keys it doesn't use.
@@ -664,8 +705,8 @@ impl App {
         let Some(node) = self.browser.selected().and_then(|i| self.nav.last()?.get(i).copied()) else { return };
         match (node, load) {
             (Node::Track(s, i), Some(deck)) => {
-                if self.slots[deck].deck.snapshot().playing {
-                    self.status = "Stop the deck to load".into();
+                if let Some(why) = refuses_load(&self.slots[deck].deck.snapshot()) {
+                    why.clone_into(&mut self.status);
                     return;
                 }
                 let Some(lib) = self.libs.get(s) else { return };
@@ -693,8 +734,8 @@ impl App {
 
     /// Load a file dropped on the window onto the focused deck.
     fn load_dropped(&mut self, p: PathBuf) {
-        if self.slots[self.focus].deck.snapshot().playing {
-            self.status = "Stop the deck to load".into();
+        if let Some(why) = refuses_load(&self.slots[self.focus].deck.snapshot()) {
+            why.clone_into(&mut self.status);
             return;
         }
         self.status = format!("Analysing {}…", file_name(&p));
@@ -744,7 +785,7 @@ impl App {
             Ok(t) => {
                 let t = Arc::new(t);
                 if slot.deck.load(Arc::clone(&t)).is_err() {
-                    self.status = "Stop the deck to load".into();
+                    refuses_load(&slot.deck.snapshot()).unwrap_or(STOP_TO_LOAD).clone_into(&mut self.status);
                     return;
                 }
                 let (entry_id, from) = (loaded.entry_id, loaded.from);
@@ -776,7 +817,7 @@ impl App {
                 self.status.clear();
                 any = true;
             } else if p.since.elapsed() > LOAD_TIMEOUT {
-                self.status = "Stop the deck to load".into();
+                refuses_load(&slot.deck.snapshot()).unwrap_or(STOP_TO_LOAD).clone_into(&mut self.status);
             } else {
                 slot.pending = Some(p);
             }

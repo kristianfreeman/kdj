@@ -60,6 +60,9 @@ struct Dispatch {
     net: Option<Arc<Net>>,
     /// The deck last found to have nobody, to say so once.
     nobody: Option<usize>,
+    /// Modifier buttons held down (their messages' note numbers): SHIFT is
+    /// on while any is.
+    shift: Vec<u8>,
 }
 
 impl Dispatch {
@@ -77,7 +80,7 @@ impl Dispatch {
             .iter()
             .filter_map(|b| Some(((b.channel.map(|c| c.saturating_sub(1)), b.cc?), b.up.is_some())))
             .collect();
-        Self { map, encoders, decks, ui, focus, net, nobody: None }
+        Self { map, encoders, decks, ui, focus, net, nobody: None, shift: Vec::with_capacity(4) }
     }
 
     /// Whether `msg` comes from an encoder (looked up the way `MidiMap`
@@ -96,6 +99,10 @@ impl Dispatch {
         let target = match event {
             Event::Hit(h) => h.target,
             Event::Fader { target, .. } => target,
+            Event::Modifier { held, .. } => {
+                self.modifier(msg, held, from);
+                return;
+            }
         };
         let deck = match (self.route(target), from) {
             (Route::Here(deck), _) => deck,
@@ -118,6 +125,22 @@ impl Dispatch {
                     engine.tempo_fader(position);
                 }
             }
+            Event::Modifier { .. } => {}
+        }
+    }
+
+    /// SHIFT (or another modifier) went down or up. It counts for every deck,
+    /// so from the controller here it goes to every other kdj too.
+    fn modifier(&mut self, msg: &[u8], held: bool, from: Origin) {
+        let Some(&note) = msg.get(1) else { return };
+        self.shift.retain(|&n| n != note);
+        if held {
+            self.shift.push(note);
+        }
+        if from == Origin::Controller
+            && let Some(net) = &self.net
+        {
+            net.send_midi_all(msg);
         }
     }
 
@@ -143,15 +166,17 @@ impl Dispatch {
     }
 
     fn hit(&mut self, hit: Hit, deck: usize, encoder: bool) {
+        // With SHIFT held, a button's SHIFT action if it has one.
+        let action = hit.shifted.filter(|_| !self.shift.is_empty()).unwrap_or(hit.action);
         for _ in 0..hit.repeat {
-            if hit.action.is_ui() {
-                let _ = self.ui.send((hit.action, hit.edge, deck));
+            if action.is_ui() {
+                let _ = self.ui.send((action, hit.edge, deck));
             } else if let Some(engine) = self.decks.get_mut(deck) {
-                engine.send(hit.action, hit.edge);
+                engine.send(action, hit.edge);
                 // An encoder tick is a whole press: release it too, or a
                 // hold action (nudge, cue) on an encoder would never let go.
                 if encoder {
-                    engine.send(hit.action, Edge::Release);
+                    engine.send(action, Edge::Release);
                 }
             }
         }

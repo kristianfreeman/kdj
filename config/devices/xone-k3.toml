@@ -88,10 +88,19 @@ kind = "button"
 y = 12.0
 note = [24, 25, 26, 27]
 
-# Bottom row, left to right: encoder, LAYER, SHIFT, encoder.
+# Bottom row, left to right: LAYER, encoder, encoder, SHIFT (the user
+# guide's drawing).
+[[control]]
+kind = "button"
+name = "LAYER"
+x = 0
+y = 13.1
+h = 1.7
+note = 12
+
 [[control]]
 kind = "encoder"
-x = 0
+x = 1
 y = 13.1
 h = 1.7
 cc = 20
@@ -99,23 +108,15 @@ push = 13
 
 [[control]]
 kind = "button"
-name = "LAYER"
-x = 1
-y = 13.1
-h = 1.7
-note = 12
-
-[[control]]
-kind = "button"
 name = "SHIFT"
-x = 2
+x = 3
 y = 13.1
 h = 1.7
 note = 15
 
 [[control]]
 kind = "encoder"
-x = 3
+x = 2
 y = 13.1
 h = 1.7
 cc = 21

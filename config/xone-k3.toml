@@ -1,27 +1,29 @@
 # kdj on an Allen & Heath Xone:K3 with its factory map (latching layers
-# off, MIDI channel 15), split down the middle: the left two columns drive
+# off, MIDI channel 15), split down the middle: the left two columns play
 # deck A, the right two deck B, the same layout on each side. With two kdj
 # Pis on one network, the K3 plugs into either; each Pi takes a deck letter
 # and the other half's controls (and LEDs) go across the network. Notes from
 # the K3 user guide's "MIDI implementation default"; LEDs answer on the same
 # notes (red; add 36 for amber, 72 for green with led_offset). A column's
 # controls are the one to its left's plus 1, so deck B's are deck A's plus 2.
+# LAYER and SHIFT are both SHIFT: held, a button with a `shift` action does
+# that instead.
 #
 #   ┌───────── deck A ─────────┬───────── deck B ─────────┐
-#   │ JOG          LOOP SIZE   │ JOG          LOOP SIZE   │ encoders
-#   │ push: KEY    push: LOOP  │ push: KEY    push: LOOP  │
-#   │ (pots: unused — the mixer does EQ)                  │
+#   │ FINE TEMPO   LOOP SIZE   │ FINE TEMPO   LOOP SIZE   │ encoders
+#   │ push: RESET  push: LOOP  │ push: RESET  push: LOOP  │
+#   │ (pots: unused: the mixer does EQ)                   │
 #   │ SYNC         MASTER      │ SYNC         MASTER      │ row 1
 #   │ ◀ JUMP       JUMP ▶      │ ◀ JUMP       JUMP ▶      │ row 2
-#   │ QUANTIZE     RANGE       │ QUANTIZE     RANGE       │ row 3
+#   │ LOCK (⇧ off) KEY LOCK    │ LOCK (⇧ off) KEY LOCK    │ row 3
 #   │ TEMPO        —           │ TEMPO        —           │ faders
 #   │ HOT CUE A    B           │ HOT CUE A    B           │ grid 1
 #   │ HOT CUE C    D           │ HOT CUE C    D           │ grid 2
 #   │ ◀ NUDGE      NUDGE ▶     │ ◀ NUDGE      NUDGE ▶     │ grid 3
 #   │ CUE          PLAY        │ CUE          PLAY        │ grid 4
-#   │ encoder: browse,         │ SHIFT: BROWSE / BACK     │ bottom
-#   │   push: open / load      │ encoder: browse,         │
-#   │ LAYER: BROWSE / BACK     │   push: open / load      │
+#   │ LAYER = SHIFT            │               SHIFT      │ bottom
+#   │ encoder: turn browse, push open/load, hold back,    │
+#   │          SHIFT + push browser on/off (one per side) │
 #   └──────────────────────────┴──────────────────────────┘
 
 [midi]
@@ -29,22 +31,35 @@ port = "XONE:K3"
 # Lit LEDs in red (0); 36 for amber, 72 for green.
 led_offset = 0
 
-# ═══ Deck A: columns 1–2 ═══
+# --- Both decks: LAYER (note 12) and SHIFT (note 15) are SHIFT.
 
-# --- Encoders (CC 0–1, two's complement; push notes 52–53).
+[[midi.map]]
+channel = 15
+note = 12
+modifier = "Shift"
 
+[[midi.map]]
+channel = 15
+note = 15
+modifier = "Shift"
+
+# ═══ Deck A: columns 1-2 ═══
+
+# --- Encoders: turn (CC 0-1, two's complement); push (notes 52-53).
+
+# fine tempo: 0.02% a click (0.05% on ±16)
 [[midi.map]]
 channel = 15
 deck = 0
 cc = 0
-up = "JogForward"
-down = "JogBack"
+up = "TempoUp"
+down = "TempoDown"
 
 [[midi.map]]
 channel = 15
 deck = 0
 note = 52
-action = "KeyLock"
+action = "TempoReset"
 
 [[midi.map]]
 channel = 15
@@ -59,7 +74,7 @@ deck = 0
 note = 53
 action = "LoopToggle"
 
-# --- Buttons under the pots: rows 1–3 (notes 48–49, 44–45, 40–41).
+# --- Buttons under the pots: rows 1-3 (notes 48-49, 44-45, 40-41).
 
 [[midi.map]]
 channel = 15
@@ -85,17 +100,19 @@ deck = 0
 note = 45
 action = "BeatJumpForward"
 
+# locked: no loading; SHIFT + LOCK unlocks
 [[midi.map]]
 channel = 15
 deck = 0
 note = 40
-action = "Quantize"
+action = "Lock"
+shift = "Unlock"
 
 [[midi.map]]
 channel = 15
 deck = 0
 note = 41
-action = "TempoRange"
+action = "KeyLock"
 
 # --- Fader 1 (CC 16): tempo, soft takeover. Fader 2 (CC 17) unused.
 
@@ -105,7 +122,7 @@ deck = 0
 cc = 16
 fader = "Tempo"
 
-# --- Grid (notes 36–37, 32–33, 28–29, 24–25): hot cues, nudge, CUE and PLAY.
+# --- Grid (notes 36-37, 32-33, 28-29, 24-25): hot cues, nudge, CUE and PLAY.
 
 [[midi.map]]
 channel = 15
@@ -131,17 +148,18 @@ deck = 0
 note = 33
 action = "HotCue4"
 
+# a tap: a short push, like touching a jog wheel
 [[midi.map]]
 channel = 15
 deck = 0
 note = 28
-action = "NudgeBack"
+action = "JogBack"
 
 [[midi.map]]
 channel = 15
 deck = 0
 note = 29
-action = "NudgeForward"
+action = "JogForward"
 
 [[midi.map]]
 channel = 15
@@ -149,14 +167,16 @@ deck = 0
 note = 24
 action = "Cue"
 
+# lit: flashes on the beat while playing
 [[midi.map]]
 channel = 15
 deck = 0
 note = 25
 action = "PlayPause"
 
-# --- Bottom left: encoder (CC 20, push 13) and LAYER (note 12).
+# --- Bottom: left encoder (CC 20, push 13).
 
+# turn: browse (opens the browser)
 [[midi.map]]
 channel = 15
 deck = 0
@@ -164,32 +184,28 @@ cc = 20
 up = "BrowseDown"
 down = "BrowseUp"
 
+# push: open / load; hold: back; SHIFT + push: browser on/off
 [[midi.map]]
 channel = 15
 deck = 0
 note = 13
 action = "BrowseLoad"
+shift = "Browse"
 
-[[midi.map]]
-channel = 15
-deck = 0
-note = 12
-action = "BrowseBack"
-
-# ═══ Deck B: columns 3–4, deck A's notes and CCs plus 2 ═══
+# ═══ Deck B: columns 3-4, deck A's notes and CCs plus 2 ═══
 
 [[midi.map]]
 channel = 15
 deck = 1
 cc = 2
-up = "JogForward"
-down = "JogBack"
+up = "TempoUp"
+down = "TempoDown"
 
 [[midi.map]]
 channel = 15
 deck = 1
 note = 54
-action = "KeyLock"
+action = "TempoReset"
 
 [[midi.map]]
 channel = 15
@@ -232,13 +248,14 @@ action = "BeatJumpForward"
 channel = 15
 deck = 1
 note = 42
-action = "Quantize"
+action = "Lock"
+shift = "Unlock"
 
 [[midi.map]]
 channel = 15
 deck = 1
 note = 43
-action = "TempoRange"
+action = "KeyLock"
 
 [[midi.map]]
 channel = 15
@@ -274,13 +291,13 @@ action = "HotCue4"
 channel = 15
 deck = 1
 note = 30
-action = "NudgeBack"
+action = "JogBack"
 
 [[midi.map]]
 channel = 15
 deck = 1
 note = 31
-action = "NudgeForward"
+action = "JogForward"
 
 [[midi.map]]
 channel = 15
@@ -294,7 +311,7 @@ deck = 1
 note = 27
 action = "PlayPause"
 
-# --- Bottom right: encoder (CC 21, push 14) and SHIFT (note 15).
+# --- Bottom: right encoder (CC 21, push 14).
 
 [[midi.map]]
 channel = 15
@@ -308,9 +325,4 @@ channel = 15
 deck = 1
 note = 14
 action = "BrowseLoad"
-
-[[midi.map]]
-channel = 15
-deck = 1
-note = 15
-action = "BrowseBack"
+shift = "Browse"

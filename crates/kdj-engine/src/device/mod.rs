@@ -225,6 +225,8 @@ pub struct Part {
     pub label: String,
     /// The deck it drives.
     pub target: Target,
+    /// Counts for every deck (SHIFT), so no one deck's legend.
+    pub both: bool,
 }
 
 /// A control and what it does; both empty if it's unmapped.
@@ -325,12 +327,13 @@ impl Placed {
 /// What a binding does, or None if it's malformed (`MidiMap` rejects those).
 fn part(b: &Binding) -> Option<Part> {
     let label = match (b.action, b.up, b.down, b.fader) {
+        _ if b.modifier.is_some() => "SHIFT".to_owned(),
         (Some(a), None, None, None) => a.label().to_owned(),
         (None, Some(up), Some(down), None) => Action::pair_label(up, down),
         (None, None, None, Some(FaderKind::Tempo)) => "TEMPO".to_owned(),
         _ => return None,
     };
-    Some(Part { label, target: b.deck.map_or(Target::Focused, Target::Deck) })
+    Some(Part { label, target: b.deck.map_or(Target::Focused, Target::Deck), both: b.modifier.is_some() })
 }
 
 fn address(b: &Binding) -> String {
@@ -394,12 +397,19 @@ mod tests {
         assert_eq!(d.control(Address::Note(26)).map(|p| p.control.rect[0]), Some(2.0), "column 3");
         assert_eq!(main(&d, Address::Note(36)), Some(("HOT A", Target::Deck(0))));
         // Encoders: the turn and the push.
-        let jog = d.control(Address::Cc(0)).expect("top left encoder");
-        assert_eq!(jog.main.as_ref().map(|p| p.label.as_str()), Some("JOG"));
-        assert_eq!(jog.push.as_ref().map(|p| p.label.as_str()), Some("KEY"));
+        let tempo = d.control(Address::Cc(0)).expect("top left encoder");
+        assert_eq!(tempo.main.as_ref().map(|p| p.label.as_str()), Some("TEMPO"));
+        assert_eq!(tempo.push.as_ref().map(|p| p.label.as_str()), Some("TEMPO 0"));
         assert_eq!(main(&d, Address::Cc(3)), Some(("LOOP ×2/÷2", Target::Deck(1))));
         assert_eq!(main(&d, Address::Cc(16)), Some(("TEMPO", Target::Deck(0))));
-        assert_eq!(main(&d, Address::Note(15)), Some(("BROWSE/BACK", Target::Deck(1))), "SHIFT");
+        assert_eq!(main(&d, Address::Note(15)), Some(("SHIFT", Target::Focused)), "SHIFT");
+        assert_eq!(main(&d, Address::Note(12)), Some(("SHIFT", Target::Focused)), "LAYER");
+        // The bottom row is LAYER, the two encoders, SHIFT.
+        let x = |a| d.control(a).map(|p| p.control.rect[0]);
+        assert_eq!(
+            [x(Address::Note(12)), x(Address::Cc(20)), x(Address::Cc(21)), x(Address::Note(15))],
+            [0.0, 1.0, 2.0, 3.0].map(Some)
+        );
         // The pots and the second faders do nothing.
         for cc in (4..=15).chain([17, 19]) {
             assert_eq!(main(&d, Address::Cc(cc)), None, "CC {cc}");

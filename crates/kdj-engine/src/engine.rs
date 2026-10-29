@@ -145,6 +145,8 @@ pub struct Snapshot {
     pub wide_range: bool,
     pub keylock: bool,
     pub quantize: bool,
+    /// Locked: loads are refused, playing or not (see `Action::Lock`).
+    pub locked: bool,
     /// -1, 0 or 1: the direction of any nudge in progress.
     pub nudge: i8,
     /// The nudge's current bend, as a fraction of speed.
@@ -254,7 +256,8 @@ impl EngineHandle {
     /// the command queue is full. If it starts playing before the load lands,
     /// the engine drops the track instead: watch `Snapshot::track_id`.
     pub fn load(&mut self, track: Arc<Track>) -> Result<(), Arc<Track>> {
-        if self.snapshot.output_buffer().playing {
+        let s = self.snapshot.output_buffer();
+        if s.playing || s.locked {
             return Err(track);
         }
         // Push a second reference so a full queue can hand back the original.
@@ -271,6 +274,7 @@ impl EngineHandle {
     }
 }
 
+#[expect(clippy::struct_excessive_bools, reason = "the deck's independent switches: play, key lock, quantize, lock…")]
 pub struct Engine {
     commands: Consumer<Command>,
     inputs: Vec<Consumer<Input>>,
@@ -296,6 +300,7 @@ pub struct Engine {
     wide_range: bool,
     keylock: bool,
     quantize: bool,
+    locked: bool,
     nudge: Nudge,
     looping: Option<Loop>,
     loop_size: usize,
@@ -358,6 +363,7 @@ impl Engine {
             wide_range: false,
             keylock: true,
             quantize: true,
+            locked: false,
             nudge: Nudge::new(cfg.nudge),
             looping: None,
             loop_size: DEFAULT_LOOP,
@@ -694,7 +700,7 @@ impl Engine {
     }
 
     fn load(&mut self, track: Arc<Track>) {
-        if self.playing {
+        if self.playing || self.locked {
             self.dispose(track);
             return;
         }
@@ -769,6 +775,8 @@ impl Engine {
             Action::PhaseForward => self.shift(self.phase_step()),
             Action::PhaseBack => self.shift(-self.phase_step()),
             Action::KeyLock => self.keylock = !self.keylock,
+            Action::Lock => self.locked = true,
+            Action::Unlock => self.locked = false,
             Action::Quantize => self.quantize = !self.quantize,
             Action::Sync => {
                 self.link.mode = if self.link.mode == SyncMode::Follow { SyncMode::Off } else { SyncMode::Follow };
@@ -1034,6 +1042,7 @@ impl Engine {
             wide_range: self.wide_range,
             keylock: self.keylock,
             quantize: self.quantize,
+            locked: self.locked,
             nudge: self.nudge_dir(),
             bend: self.nudge.bend(),
             rate: self.rate(),
@@ -1075,6 +1084,7 @@ impl Snapshot {
             wide_range: false,
             keylock: true,
             quantize: true,
+            locked: false,
             nudge: 0,
             bend: 0.0,
             rate: 1.0,
