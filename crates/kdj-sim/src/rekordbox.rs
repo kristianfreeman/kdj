@@ -145,7 +145,7 @@ fn truncate(s: &str, n: usize) -> String {
 /// Where the kick's attack lands relative to each grid's beats: average the
 /// low-passed audio around every beat and find the half-rise point.
 pub fn probe(sample_rate: u32) -> Result<bool> {
-    println!("{:<40} {:>13} {:>13} {:>10} {:>12}", "track", "kick vs rb", "kick vs ours", "rb − ours", "lame delay");
+    println!("{:<40} {:>13} {:>13} {:>10} {:>12}", "track", "kick vs rb", "kick vs ours", "rb − ours", "lead-in");
     for t in candidates(sample_rate)? {
         let (track, _) = analysis::load_file(&t.audio, sample_rate)?;
         let env = low_envelope(&track.samples, sample_rate);
@@ -153,9 +153,8 @@ pub fn probe(sample_rate: u32) -> Result<bool> {
         let rb = attack_ms(&env, &t.rb, track.frames(), sample_rate);
         let ours = attack_ms(&env, &track.grid, track.frames(), sample_rate);
         let d = analysis::decode::decode(&t.audio, None)?;
-        let delay = d
-            .trimmed_delay
-            .map_or_else(|| "none".into(), |f| format!("{:.1} ms", f64::from(f) / f64::from(d.sample_rate) * 1000.0));
+        #[expect(clippy::cast_precision_loss, reason = "a few thousand frames")]
+        let delay = format!("{:.1} ms", d.lead_in as f64 / f64::from(d.sample_rate) * 1000.0);
         let grid_gap = (t.rb.anchor - track.grid.anchor) / f64::from(sample_rate) * 1000.0;
         let p = track.grid.period() / f64::from(sample_rate) * 1000.0;
         let gap = (grid_gap + p / 2.0).rem_euclid(p) - p / 2.0;

@@ -92,3 +92,56 @@ fn a_track_too_long_for_memory_is_refused_not_loaded() -> Result<()> {
     assert_eq!(fits?.samples.len(), 96_000 * 2, "mono comes out as stereo");
     Ok(())
 }
+
+/// An MP3 of `frames` silent frames (MPEG-1, 44.1 kHz, 128 kbps) after an
+/// Info frame from `encoder` declaring a delay of 576 (1105 with the decoder's).
+fn silent_mp3(encoder: &[u8; 9], frames: usize) -> Vec<u8> {
+    const FRAME: usize = 417;
+    let header = [0xff, 0xfb, 0x90, 0x00];
+    let mut info = vec![0; FRAME];
+    info[..4].copy_from_slice(&header);
+    // After the header and 32 bytes of side information; flags stay 0.
+    info[36..40].copy_from_slice(b"Info");
+    info[44..53].copy_from_slice(encoder);
+    let trim = 576u32 << 12;
+    info[65..68].copy_from_slice(&trim.to_be_bytes()[1..]);
+    let mut audio = vec![0; FRAME];
+    audio[..4].copy_from_slice(&header);
+    let mut b = info;
+    for _ in 0..frames {
+        b.extend_from_slice(&audio);
+    }
+    b
+}
+
+#[test]
+fn an_info_frame_without_a_delay_gets_no_lead_in() -> Result<()> {
+    // Most of a real library: an Info frame from an encoder that declares no
+    // delay, which Rekordbox's grids fit as decoded.
+    let plain = analysis::decode::decode_bytes(silent_mp3(b"Fraunhof\0", 40), Some("mp3"), None)?;
+    assert_eq!(plain.lead_in, 0);
+    assert_eq!(plain.samples.len() / 2, 40 * 1152);
+    Ok(())
+}
+
+/// Rekordbox's timeline for an MP3 with a LAME tag runs the encoder delay
+/// (1105 frames) plus one MPEG frame (1152, the tag's) behind the audio as
+/// Symphonia decodes it: measured on 12 such tracks, kicks came 47.0 ms ahead
+/// of their grids at 48 kHz and about 50 ms at 44.1 kHz, every other track
+/// was on its grid. Sample 20 000 of the fixture's source (a click in 1 s of
+/// silence, `lame -q 0 -b 64 -m m`) must play at 20 000 + 2257.
+#[test]
+fn a_lame_mp3_sits_where_rekordbox_expects_it() -> Result<()> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/click-lame.mp3");
+    let d = analysis::decode::decode(&path, None)?;
+    assert_eq!((d.sample_rate, d.lead_in), (44_100, 1105 + 1152));
+    let (loudest, _) = d
+        .samples
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .enumerate()
+        .fold((0, 0.0f32), |best, (i, &[l, _])| if l.abs() > best.1 { (i, l.abs()) } else { best });
+    assert!(loudest.abs_diff(20_000 + 2257) <= 2, "the click plays at frame {loudest}");
+    Ok(())
+}

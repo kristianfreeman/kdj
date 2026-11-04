@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use symphonia::core::codecs::audio::AudioDecoderOptions;
+use symphonia::core::codecs::audio::well_known::CODEC_ID_MP3;
 use symphonia::core::errors::Error;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
@@ -14,8 +15,8 @@ use symphonia::core::meta::MetadataOptions;
 pub struct Decoded {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
-    /// Encoder delay trimmed from the start (MP3 LAME tag), in frames.
-    pub trimmed_delay: Option<u32>,
+    /// Silence put in front of the audio (see `lead_in`), in frames.
+    pub lead_in: usize,
 }
 
 impl std::fmt::Debug for Decoded {
@@ -24,9 +25,25 @@ impl std::fmt::Debug for Decoded {
         f.debug_struct("Decoded")
             .field("frames", &(self.samples.len() / 2))
             .field("sample_rate", &self.sample_rate)
-            .field("trimmed_delay", &self.trimmed_delay)
+            .field("lead_in", &self.lead_in)
             .finish_non_exhaustive()
     }
+}
+
+/// Frames of silence an MP3 with an encoder's tag needs in front of it to sit
+/// where Rekordbox's grid, cues and waveform expect it. Symphonia cuts the
+/// encoder delay the tag declares and skips the frame holding the tag, while
+/// Rekordbox's timeline keeps both: measured on a library, kicks on these
+/// tracks came that much ahead of the grid (47.0 ms at 48 kHz) and all others
+/// were on it. The delay is 0 if the tag is from an encoder Symphonia doesn't
+/// know, and those need nothing.
+fn lead_in(is_mp3: bool, delay: Option<u32>, rate: u32) -> usize {
+    let delay = delay.filter(|&d| is_mp3 && d > 0).map_or(0, |d| d as usize);
+    if delay == 0 {
+        return 0;
+    }
+    // MPEG-1 frames are twice as long as those of the lower MPEG-2 rates.
+    delay + if rate < 32_000 { 576 } else { 1152 }
 }
 
 /// Decode the default audio track of the file at `path`, refusing it if it
@@ -62,7 +79,6 @@ fn decode_from(source: Box<dyn MediaSource>, ext: Option<&str>, max_frames: Opti
         .context("unrecognised audio format")?;
     let track = format.default_track(TrackType::Audio).ok_or_else(|| anyhow!("no audio track"))?;
     let track_id = track.id;
-    let trimmed_delay = track.delay;
     let max = max_frames.unwrap_or(usize::MAX);
     let rate = track.codec_params.as_ref().and_then(|p| p.audio()).and_then(|a| a.sample_rate).unwrap_or(44_100);
     let too_long = move || {
@@ -75,8 +91,10 @@ fn decode_from(source: Box<dyn MediaSource>, ext: Option<&str>, max_frames: Opti
     if expected.is_some_and(|n| n > max) {
         return Err(too_long());
     }
-    let mut samples = Vec::with_capacity(expected.unwrap_or(0).saturating_mul(2));
     let params = track.codec_params.as_ref().and_then(|p| p.audio()).ok_or_else(|| anyhow!("not audio"))?;
+    let lead_in = lead_in(params.codec == CODEC_ID_MP3, track.delay, rate);
+    let mut samples = Vec::with_capacity(expected.unwrap_or(0).saturating_add(lead_in).saturating_mul(2));
+    samples.resize(lead_in * 2, 0.0);
     let mut decoder = symphonia::default::get_codecs().make_audio_decoder(params, &AudioDecoderOptions::default())?;
 
     let mut packet_buf = Vec::new();
@@ -104,8 +122,8 @@ fn decode_from(source: Box<dyn MediaSource>, ext: Option<&str>, max_frames: Opti
             return Err(too_long());
         }
     }
-    if samples.is_empty() {
+    if samples.len() == lead_in * 2 {
         return Err(anyhow!("no audio in it"));
     }
-    Ok(Decoded { samples, sample_rate, trimmed_delay })
+    Ok(Decoded { samples, sample_rate, lead_in })
 }
