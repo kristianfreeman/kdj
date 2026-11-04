@@ -1,6 +1,6 @@
 [package]
 name = "kdj"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 publish = false
 license.workspace = true
@@ -9,9 +9,9 @@ license.workspace = true
 anyhow = "1.0.104"
 assert_no_alloc = "1.1.2"
 cpal = "0.18.2"
-kdj-engine = { version = "0.1.0", path = "../kdj-engine" }
-kdj-library = { version = "0.1.0", path = "../kdj-library" }
-kdj-ui = { version = "0.1.0", path = "../kdj-ui" }
+kdj-engine = { version = "0.2.0", path = "../kdj-engine" }
+kdj-library = { version = "0.2.0", path = "../kdj-library" }
+kdj-ui = { version = "0.2.0", path = "../kdj-ui" }
 glow = "0.18.0"
 midir = "0.11.0"
 rtrb = "0.4.0"
