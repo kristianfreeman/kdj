@@ -47,7 +47,7 @@ use anyhow::{Result, anyhow};
 use kdj_engine::analysis::{self, synth::SynthSpec};
 use kdj_engine::keymap::{Keymap, Layer};
 use kdj_engine::midimap::MidiMap;
-use kdj_engine::session::LocalSession;
+use kdj_engine::session::{LocalSession, Master};
 use kdj_engine::{Action, Edge, Engine, EngineConfig, EngineHandle, InputSender, Snapshot, Track};
 use kdj_library::nav::{self, Node};
 use kdj_library::shared::Remote;
@@ -405,7 +405,9 @@ struct App {
 }
 
 impl App {
-    /// The app on `slots`, on the network and sharing this kdj's library.
+    /// The app on `slots`, on the network (holding MASTER with `master`) and
+    /// sharing this kdj's library.
+    #[expect(clippy::too_many_arguments, reason = "what the app starts from, all made in run")]
     fn new(
         args: &Args,
         slots: Vec<Slot>,
@@ -413,8 +415,9 @@ impl App {
         (scan_tx, load_tx): (mpsc::Sender<Scan>, mpsc::Sender<Loaded>),
         sample_rate: u32,
         status: String,
+        master: Arc<Master>,
     ) -> Self {
-        let net = join_network(args);
+        let net = join_network(args, master);
         Self {
             slots,
             focus: 0,
@@ -846,7 +849,8 @@ fn run() -> Result<()> {
     let (engines, handles, midi_inputs) = engines(args.decks, sample_rate);
     eprintln!("audio: {output_name} at {sample_rate} Hz, asked for {} frames, {} deck(s)", args.buffer, args.decks);
     let info = system_info(&args, &output_name, sample_rate);
-    let hook = Some(sync_hook(&args, sample_rate));
+    let master = Arc::new(Master::new(&hostname()));
+    let hook = Some(sync_hook(&args, sample_rate, Arc::clone(&master)));
     let silent = output.is_none();
     let mut audio = match output {
         Some(o) => o.start(engines, hook)?,
@@ -866,19 +870,14 @@ fn run() -> Result<()> {
     let mut events = screen.sdl.event_pump().map_err(|e| anyhow!(e))?;
 
     let channels = (scan_tx, load_tx);
-    let mut app = App::new(&args, slots, &info, channels, sample_rate, status);
+    let mut app = App::new(&args, slots, &info, channels, sample_rate, status, master);
     app.set_focus(0);
     let mut midi = start_midi(&args, midi_inputs, &app.shared_focus, app.net.clone(), &mut app.settings)?;
     let debug = std::env::var_os("KDJ_DEBUG_INPUT").is_some();
     let mut input = Input { keymap, held: HashMap::new(), touch: touch::Touch::default(), finger: None, debug };
     let mut frames = Frames { started: Instant::now(), loaded: false, snaps: Vec::with_capacity(app.slots.len()) };
-    let mut audio_watch = AudioWatch {
-        errors: 0,
-        lost: false,
-        logged: Instant::now(),
-        rt_logged: false,
-        looked: Instant::now(),
-    };
+    let mut audio_watch =
+        AudioWatch { errors: 0, lost: false, logged: Instant::now(), rt_logged: false, looked: Instant::now() };
     // Without vsync, pace the loop to about 60 fps instead of spinning a core.
     let pace = (!screen.vsync).then(|| Duration::from_micros(16_667));
 
@@ -951,8 +950,8 @@ fn start_midi(
 }
 
 /// Say hello to the other kdjs on the network, to share a controller.
-fn join_network(args: &Args) -> Option<Arc<net::Net>> {
-    net::Net::start(hostname(), args.decks, args.deck)
+fn join_network(args: &Args, master: Arc<Master>) -> Option<Arc<net::Net>> {
+    net::Net::start(hostname(), args.decks, args.deck, master)
         .map_err(|e| eprintln!("net: can't share a controller with other kdjs: {e}"))
         .ok()
 }
@@ -961,7 +960,7 @@ fn join_network(args: &Args) -> Option<Arc<net::Net>> {
 /// collection, USB exports) for the kdjs on the network, kept up to date as
 /// sticks come and go.
 fn serve() -> Result<()> {
-    let net = net::Net::start(hostname(), 0, None)?;
+    let net = net::Net::start(hostname(), 0, None, Arc::default())?;
     let server = share::Server::start(Some(net))?;
     eprintln!("serve: sharing this machine's library as {} (port {})", hostname(), server.port());
     let mut scanned = None;
@@ -1108,18 +1107,19 @@ fn hostname() -> String {
 
 /// What SYNC and MASTER share: the Ableton Link session on the network, or
 /// with `--no-link` (or no Link in the build) a session local to this process.
-fn sync_hook(args: &Args, sample_rate: u32) -> Box<dyn audio::BlockHook> {
+fn sync_hook(args: &Args, sample_rate: u32, master: Arc<Master>) -> Box<dyn audio::BlockHook> {
     #[cfg(feature = "link")]
     if !args.no_link {
         let link = Arc::new(rusty_link::AblLink::new(120.0));
         link.set_num_peers_callback(|n| eprintln!("link: {n} peer(s) in the session"));
         link.enable(true);
         eprintln!("link: joined the session on the local network");
-        return Box::new(link::LinkDriver::new(link, sample_rate));
+        return Box::new(link::LinkDriver::new(link, master, sample_rate));
     }
     #[cfg(not(feature = "link"))]
-    let _ = args;
-    Box::new(audio::LocalHook(LocalSession::new(120.0, sample_rate)))
+    let _ = (args, master);
+    // Without Link the decks here share nothing with other kdjs: MASTER too.
+    Box::new(audio::LocalHook(LocalSession::new(120.0, sample_rate), Master::default()))
 }
 
 /// Start loading whatever the command line asked for; returns the status

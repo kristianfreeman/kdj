@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, ensure};
 use kdj_engine::analysis::{self, synth::SynthSpec};
-use kdj_engine::session::{self, LocalSession, Session};
+use kdj_engine::session::{self, LocalSession, Master, Session};
 use kdj_engine::sync::{SyncMode, phase_error};
 use kdj_engine::track::{GridSource, HOT_CUES, Waveform};
 use kdj_engine::{Action, BeatGrid, Edge, Engine, EngineConfig, EngineHandle, Snapshot, Track};
@@ -69,7 +69,7 @@ impl Deck {
     /// One block, following / leading `link` like the audio callback does.
     fn step(&mut self, link: Option<&mut LocalSession>) -> Snapshot {
         if let Some(link) = link {
-            session::drive(std::slice::from_mut(&mut self.engine), link, Some(1));
+            session::drive(std::slice::from_mut(&mut self.engine), link, Some(1), &Master::default());
         }
         self.engine.process(&mut self.out);
         self.handle.snapshot()
@@ -211,9 +211,8 @@ fn a_nudge_on_a_synced_deck_stays() -> Result<()> {
     let mut link = session(134.0, 0.0);
     deck.press(Action::Sync, Some(&mut link));
     link.tick();
-    let ms = |deck: &Deck, s: &Snapshot, link: &LocalSession| {
-        phase_error(deck.beat(s), link.beat()) * 60.0 / 134.0 * 1000.0
-    };
+    let ms =
+        |deck: &Deck, s: &Snapshot, link: &LocalSession| phase_error(deck.beat(s), link.beat()) * 60.0 / 134.0 * 1000.0;
     let s = run(&mut deck, &mut link, 2.0);
     let start = ms(&deck, &s, &link);
     assert!(start.abs() < 1.0, "locked: {start:.1} ms");
@@ -301,7 +300,7 @@ fn taking_master_hands_the_old_master_back_to_sync() -> Result<()> {
     a.handle.send(Action::Master, Edge::Press);
     let mut engines = [a.engine, b.engine];
     let mut step = |engines: &mut [Engine], link: &mut LocalSession| {
-        session::drive(engines, link, None);
+        session::drive(engines, link, None, &Master::default());
         for (e, out) in engines.iter_mut().zip([&mut a.out, &mut b.out]) {
             e.process(out);
         }
@@ -337,5 +336,159 @@ fn a_deck_reports_its_phase_against_the_session() -> Result<()> {
     let s = run(&mut deck, &mut link, 2.0);
     let p = s.link_phase.unwrap_or(f64::NAN);
     assert!(p.abs() < 0.002, "synced phase {p:.4}");
+    Ok(())
+}
+
+/// Two playing decks on one session: on one kdj, or each on its own
+/// (`apart`), passing their MASTER claims across as hellos do.
+struct Pair {
+    engines: [Engine; 2],
+    handles: [EngineHandle; 2],
+    outs: [Vec<f32>; 2],
+    grids: [BeatGrid; 2],
+    link: LocalSession,
+    masters: [Master; 2],
+    apart: bool,
+}
+
+impl Pair {
+    fn new(bpm: [f64; 2], apart: bool) -> Result<Self> {
+        let [a, b] = [Deck::new(bpm[0])?, Deck::new(bpm[1])?];
+        Ok(Self {
+            grids: [a.grid, b.grid],
+            engines: [a.engine, b.engine],
+            handles: [a.handle, b.handle],
+            outs: [a.out, b.out],
+            link: session(120.0, 0.0),
+            masters: [Master::new("kdj-a"), Master::new("kdj-b")],
+            apart,
+        })
+    }
+
+    fn press(&mut self, deck: usize, a: Action) {
+        self.handles[deck].send(a, Edge::Press);
+        self.handles[deck].send(a, Edge::Release);
+    }
+
+    fn step(&mut self) -> [Snapshot; 2] {
+        if self.apart {
+            for (e, m) in self.engines.iter_mut().zip(&self.masters) {
+                session::drive(std::slice::from_mut(e), &mut self.link, Some(1), m);
+            }
+        } else {
+            session::drive(&mut self.engines, &mut self.link, None, &self.masters[0]);
+        }
+        for (e, out) in self.engines.iter_mut().zip(&mut self.outs) {
+            e.process(out);
+        }
+        self.link.tick();
+        if self.apart {
+            let [(a, a_stopped), (b, b_stopped)] = [self.masters[0].ours(), self.masters[1].ours()];
+            self.masters[0].heard(b, b_stopped);
+            self.masters[1].heard(a, a_stopped);
+        }
+        [self.handles[0].snapshot(), self.handles[1].snapshot()]
+    }
+
+    /// `secs` of it, failing if a playing deck jumps (a nudge or a bend
+    /// moves it a little more than a block; a jump, thousands of frames).
+    fn run(&mut self, secs: f64) -> Result<[Snapshot; 2]> {
+        let mut last = self.step();
+        for _ in 1..blocks(secs) {
+            let s = self.step();
+            for (now, was) in s.iter().zip(&last) {
+                let moved = now.pos - was.pos;
+                ensure!(!now.playing || !was.playing || moved < 2.0 * 128.0, "jumped {moved:.0} frames in a block");
+            }
+            last = s;
+        }
+        Ok(last)
+    }
+
+    /// B's beat against A's, wrapped to the bar.
+    fn apart_beats(&self, s: &[Snapshot; 2]) -> f64 {
+        phase_error(self.grids[1].beat_at(s[1].pos), self.grids[0].beat_at(s[0].pos))
+    }
+}
+
+#[test]
+fn master_is_taken_never_turned_off_and_sync_leaves_it_be() -> Result<()> {
+    let mut deck = Deck::new(134.0)?;
+    let mut link = session(120.0, 0.0);
+    deck.press(Action::Master, Some(&mut link));
+    let s = deck.press(Action::Master, Some(&mut link));
+    assert_eq!(s.sync, SyncMode::Lead, "MASTER again keeps it");
+    let s = deck.press(Action::Sync, Some(&mut link));
+    assert_eq!(s.sync, SyncMode::Lead, "the master is in sync already");
+    Ok(())
+}
+
+/// The track coming in is on SYNC, nudged to sit right: taking MASTER there
+/// moves neither deck (the nudge still sounds), and the old master follows
+/// at the same tempo.
+#[test]
+fn taking_master_on_a_synced_deck_moves_nobody() -> Result<()> {
+    for apart in [false, true] {
+        let mut p = Pair::new([134.0, 130.0], apart)?;
+        p.press(0, Action::Master);
+        p.run(0.5)?;
+        p.press(1, Action::Sync);
+        p.run(3.0)?;
+        p.handles[1].send(Action::NudgeForward, Edge::Press);
+        p.run(0.1)?;
+        p.handles[1].send(Action::NudgeForward, Edge::Release);
+        let s = p.run(2.0)?;
+        let nudged = p.apart_beats(&s);
+        assert!(nudged > 0.01, "nudged {nudged:.4} beats");
+        p.press(1, Action::Master);
+        let s = p.run(3.0)?;
+        assert_eq!((s[0].sync, s[1].sync), (SyncMode::Follow, SyncMode::Lead), "apart: {apart}");
+        assert!((p.link.tempo() - 134.0).abs() < 0.01, "tempo {}", p.link.tempo());
+        let err = p.apart_beats(&s) - nudged;
+        assert!(err.abs() < 0.003, "moved {err:.4} beats");
+    }
+    Ok(())
+}
+
+/// Moving on to the next track: once the old one stops, MASTER goes to the
+/// deck playing on SYNC, without a jump or a tempo change.
+#[test]
+fn a_master_that_stops_hands_over_to_a_deck_on_sync() -> Result<()> {
+    for apart in [false, true] {
+        let mut p = Pair::new([134.0, 130.0], apart)?;
+        p.press(0, Action::Master);
+        p.run(0.5)?;
+        p.press(1, Action::Sync);
+        p.run(3.0)?;
+        p.press(0, Action::PlayPause);
+        let s = p.run(1.0)?;
+        assert_eq!((s[0].sync, s[1].sync), (SyncMode::Follow, SyncMode::Lead), "apart: {apart}");
+        assert!((p.link.tempo() - 134.0).abs() < 0.01, "tempo {}", p.link.tempo());
+    }
+    Ok(())
+}
+
+/// MASTER given to a stopped deck on SYNC keeps it, sets nothing till it
+/// plays, then fits the deck playing instead of moving it.
+#[test]
+fn master_given_to_a_stopped_deck_waits_then_fits_in() -> Result<()> {
+    for apart in [false, true] {
+        let mut p = Pair::new([134.0, 130.0], apart)?;
+        p.press(0, Action::Master);
+        p.press(1, Action::PlayPause); // B stopped, cued up
+        p.press(1, Action::Sync);
+        p.run(1.0)?;
+        p.press(1, Action::Master);
+        let s = p.run(1.0)?;
+        assert_eq!((s[0].sync, s[1].sync), (SyncMode::Follow, SyncMode::Lead), "apart: {apart}");
+        assert!(s[0].playing && (p.link.tempo() - 134.0).abs() < 0.01, "A plays on at {}", p.link.tempo());
+        p.press(1, Action::PlayPause);
+        p.step();
+        let s = p.run(3.0)?;
+        assert_eq!((s[0].sync, s[1].sync), (SyncMode::Follow, SyncMode::Lead));
+        assert!((p.link.tempo() - 134.0).abs() < 0.01, "tempo {}", p.link.tempo());
+        let err = p.apart_beats(&s);
+        assert!(err.abs() < 0.003, "apart by {err:.4} beats");
+    }
     Ok(())
 }

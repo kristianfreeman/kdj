@@ -67,13 +67,13 @@
 <circle cx="609" cy="166.3" r="4.9" fill="none" stroke="#464646" stroke-width="2"/>
 <rect x="608" y="163.4" width="2" height="2.9" fill="#464646"/>
 <rect x="20" y="178.9" width="184" height="22.4" fill="#f2f2f2"/>
-<text x="112" y="194.5" font-size="13" font-weight="400" text-anchor="middle" fill="#0b0b0b">SYNC</text>
+<text x="112" y="194.5" font-size="13" font-weight="400" text-anchor="middle" fill="#0b0b0b">MASTER</text>
 <rect x="212" y="178.9" width="184" height="22.4" fill="#f2f2f2"/>
-<text x="304" y="194.5" font-size="13" font-weight="400" text-anchor="middle" fill="#0b0b0b">MASTER</text>
+<text x="304" y="194.5" font-size="13" font-weight="400" text-anchor="middle" fill="#0b0b0b">SYNC</text>
 <rect x="405" y="179.9" width="182" height="20.4" fill="none" stroke="#f2f2f2" stroke-width="2"/>
-<text x="496" y="194.5" font-size="13" font-weight="400" text-anchor="middle" fill="#f2f2f2">SYNC</text>
+<text x="496" y="194.5" font-size="13" font-weight="400" text-anchor="middle" fill="#f2f2f2">MASTER</text>
 <rect x="597" y="179.9" width="182" height="20.4" fill="none" stroke="#f2f2f2" stroke-width="2"/>
-<text x="688" y="194.5" font-size="13" font-weight="400" text-anchor="middle" fill="#f2f2f2">MASTER</text>
+<text x="688" y="194.5" font-size="13" font-weight="400" text-anchor="middle" fill="#f2f2f2">SYNC</text>
 <rect x="20" y="205.2" width="184" height="22.4" fill="#f2f2f2"/>
 <text x="112" y="220.9" font-size="13" font-weight="400" text-anchor="middle" fill="#0b0b0b">← JUMP</text>
 <rect x="212" y="205.2" width="184" height="22.4" fill="#f2f2f2"/>

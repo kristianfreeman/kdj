@@ -20,6 +20,10 @@
 //! together, or set the same) settle it by the claim's stamp: picking a letter
 //! in the settings outranks every claim seen so far; equal stamps go by name.
 //! The other moves to the first letter free.
+//!
+//! Hellos also say which kdj holds MASTER (see `kdj_engine::session::Master`):
+//! one taking it says so straight away, and the others' masters go back to
+//! SYNC.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::ops::Range;
@@ -27,6 +31,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
+use kdj_engine::session::Master;
 use socket2::{Domain, Protocol, SockRef, Socket, Type};
 
 /// The hello group and port.
@@ -68,6 +73,10 @@ struct Hello {
     library_stamp: u32,
     /// Where its decks' tracks came from, or are coming from (see `Use`).
     using: Vec<Use>,
+    /// Its claim on MASTER (0: no deck there is master), and whether that
+    /// master is stopped and handing over. Missing from an older kdj's.
+    master: u64,
+    master_stopped: bool,
 }
 
 /// A track on a deck that came, or is coming, from a source on a kdj: so
@@ -111,6 +120,8 @@ fn encode_hello(h: &Hello) -> Vec<u8> {
         put_name(&mut b, &u.kdj);
         b.extend_from_slice(&u.source.to_be_bytes());
     }
+    b.extend_from_slice(&h.master.to_be_bytes());
+    b.push(u8::from(h.master_stopped));
     b
 }
 
@@ -143,6 +154,10 @@ impl<'a> Reader<'a> {
         self.take(4)?.try_into().ok().map(u32::from_be_bytes)
     }
 
+    fn u64(&mut self) -> Option<u64> {
+        self.take(8)?.try_into().ok().map(u64::from_be_bytes)
+    }
+
     fn name(&mut self) -> Option<String> {
         let n = self.u8()?;
         std::str::from_utf8(self.take(n.into())?).ok().map(str::to_owned)
@@ -156,7 +171,9 @@ fn decode_hello(b: &[u8]) -> Option<Hello> {
     let name = r.name()?;
     let uses = r.u8()?;
     let using = (0..uses).map(|_| Some(Use { kdj: r.name()?, source: r.u32()? })).collect::<Option<_>>()?;
-    Some(Hello { name, first, count, port, stamp, controller, library, library_stamp, using })
+    let master = r.u64().unwrap_or(0);
+    let master_stopped = r.u8().is_some_and(|b| b != 0);
+    Some(Hello { name, first, count, port, stamp, controller, library, library_stamp, using, master, master_stopped })
 }
 
 /// A MIDI or LED message; None if it's too long to be one.
@@ -276,6 +293,8 @@ struct State {
     hello_now: bool,
     /// This kdj's library service and what's in it (see `Hello`).
     library: (u16, u32),
+    /// The kdj last logged as holding MASTER elsewhere.
+    master_logged: Option<String>,
     using: Vec<Use>,
 }
 
@@ -293,6 +312,8 @@ pub struct Net {
     controller: AtomicBool,
     /// Changes whenever who holds which deck, or the controller, does.
     epoch: AtomicU64,
+    /// Who holds MASTER, shared with the audio thread.
+    master: Arc<Master>,
     state: Mutex<State>,
     midi_sink: Mutex<Option<MidiSink>>,
     led_sink: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
@@ -301,12 +322,13 @@ pub struct Net {
 impl Net {
     /// Join the network as `name`, running `count` decks: from `deck` if
     /// given, else the first free once the others have been heard. With no
-    /// decks it only shares a library (`--serve`).
+    /// decks it only shares a library (`--serve`). `master` is what the
+    /// audio thread claims, and where to put what the others do.
     ///
     /// # Errors
     /// If no UDP socket can be opened at all (the network itself coming and
     /// going is handled: it's tried again until it's there).
-    pub fn start(name: String, count: usize, deck: Option<usize>) -> std::io::Result<Arc<Self>> {
+    pub fn start(name: String, count: usize, deck: Option<usize>, master: Arc<Master>) -> std::io::Result<Arc<Self>> {
         let data = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
         let receiver = data.try_clone()?;
         let net = Arc::new(Self {
@@ -316,6 +338,7 @@ impl Net {
             first: AtomicUsize::new(deck.unwrap_or(0)),
             controller: AtomicBool::new(false),
             epoch: AtomicU64::new(0),
+            master,
             state: Mutex::new(State { claimed: deck.is_some() || count == 0, ..State::default() }),
             midi_sink: Mutex::new(None),
             led_sink: Mutex::new(None),
@@ -479,6 +502,8 @@ impl Net {
             library: s.library.0,
             library_stamp: s.library.1,
             using: s.using.clone(),
+            master: self.master.ours().0,
+            master_stopped: self.master.ours().1,
         }
     }
 
@@ -540,6 +565,7 @@ impl Net {
         let mut buf = [0; 1500];
         let mut next_hello = Instant::now();
         let mut nets = Vec::new();
+        let mut master_said = None;
         loop {
             match sock.recv_from(&mut buf) {
                 Ok((n, from)) => {
@@ -556,7 +582,14 @@ impl Net {
             }
             self.forget_silent();
             self.settle(started);
-            let now = std::mem::take(&mut self.state().hello_now);
+            self.hear_master();
+            // MASTER changed hands here: tell the others now.
+            let master = self.master.ours();
+            if master_said.is_some_and(|(said, _)| (said == 0) != (master.0 == 0)) {
+                eprintln!("net: MASTER {}", if master.0 == 0 { "went to another deck" } else { "is here" });
+            }
+            let now = std::mem::take(&mut self.state().hello_now) || Some(master) != master_said;
+            master_said = Some(master);
             if now || Instant::now() >= next_hello {
                 nets = join(sock, &nets);
                 self.send_hello(sock, &nets, None);
@@ -621,6 +654,22 @@ impl Net {
         if gone {
             self.epoch.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Pass on the highest claim on MASTER among the kdjs still heard.
+    fn hear_master(&self) {
+        let mut s = self.state();
+        let top = s.peers.iter().filter(|p| p.hello.master != 0).max_by_key(|p| p.hello.master);
+        let (claim, stopped) = top.map_or((0, false), |p| (p.hello.master, p.hello.master_stopped));
+        let holder = top.map(|p| p.hello.name.clone());
+        if holder != s.master_logged {
+            if let Some(name) = &holder {
+                eprintln!("net: {name} holds MASTER");
+            }
+            s.master_logged = holder;
+        }
+        drop(s);
+        self.master.heard(claim, stopped);
     }
 
     /// Claim a letter once everyone's been heard; move off one that clashes.
@@ -773,10 +822,16 @@ mod tests {
             library: 50_124,
             library_stamp: 99,
             using: vec![Use { kdj: "kdj-elm-fox".into(), source: 2 }],
+            master: (3 << 32) | 9,
+            master_stopped: true,
         };
         assert_eq!(decode(&encode_hello(&h)), Some(Packet::Hello(h.clone())));
         let serve = Hello { count: 0, using: Vec::new(), ..h.clone() };
         assert_eq!(decode(&encode_hello(&serve)), Some(Packet::Hello(serve)));
+        let mut older = encode_hello(&h);
+        older.truncate(older.len() - 9);
+        let Some(Packet::Hello(older)) = decode(&older) else { panic!("an older kdj's hello still decodes") };
+        assert_eq!((older.master, older.master_stopped), (0, false), "it claims no MASTER");
         let long = Hello { name: "é".repeat(40), ..h };
         let Some(Packet::Hello(cut)) = decode(&encode_hello(&long)) else { panic!("a long name still decodes") };
         assert_eq!(cut.name, "é".repeat(31), "cut to 63 bytes, on a character boundary");
@@ -792,7 +847,7 @@ mod tests {
 
     #[test]
     fn a_kdj_on_two_networks_is_one_kdj() {
-        let net = Net::start("kdj-test-here".into(), 1, Some(0)).expect("a socket");
+        let net = Net::start("kdj-test-here".into(), 1, Some(0), Arc::default()).expect("a socket");
         let h = Hello {
             name: "kdj-test-there".into(),
             first: 1,
@@ -803,6 +858,8 @@ mod tests {
             library: 0,
             library_stamp: 0,
             using: Vec::new(),
+            master: 0,
+            master_stopped: false,
         };
         let cable = SocketAddr::from(([169, 254, 9, 9], PORT));
         let wifi = SocketAddr::from(([10, 9, 9, 9], PORT));
@@ -859,8 +916,8 @@ mod tests {
     #[test]
     #[ignore = "uses the network (multicast on this machine)"]
     fn two_kdjs_find_each_other_and_share_a_controller() {
-        let a = Net::start("kdj-test-a".into(), 1, Some(0)).expect("a");
-        let b = Net::start("kdj-test-b".into(), 1, None).expect("b");
+        let a = Net::start("kdj-test-a".into(), 1, Some(0), Arc::default()).expect("a");
+        let b = Net::start("kdj-test-b".into(), 1, None, Arc::default()).expect("b");
         let (tx, rx) = mpsc::channel();
         b.on_midi(Box::new(move |m| drop(tx.send(m.to_vec()))));
         let deadline = Instant::now() + Duration::from_secs(5);

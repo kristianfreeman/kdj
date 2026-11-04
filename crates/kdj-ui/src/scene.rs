@@ -161,7 +161,7 @@ impl Scene {
             (range, false, Action::TempoRange),
             ("Q", s.quantize, Action::Quantize),
             ("KEY", s.keylock, Action::KeyLock),
-            ("SYNC", s.sync == SyncMode::Follow, Action::Sync),
+            ("SYNC", s.sync != SyncMode::Off, Action::Sync),
             ("MASTER", s.sync == SyncMode::Lead, Action::Master),
         ];
         let mut x = WIDTH - 16.0;

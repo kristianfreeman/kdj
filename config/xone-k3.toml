@@ -13,7 +13,7 @@
 #   │ FINE TEMPO   LOOP SIZE   │ FINE TEMPO   LOOP SIZE   │ encoders
 #   │ push: RESET  push: LOOP  │ push: RESET  push: LOOP  │
 #   │ (pots: unused: the mixer does EQ)                   │
-#   │ SYNC         MASTER      │ SYNC         MASTER      │ row 1
+#   │ MASTER       SYNC        │ MASTER       SYNC        │ row 1
 #   │ ◀ JUMP       JUMP ▶      │ ◀ JUMP       JUMP ▶      │ row 2
 #   │ LOCK (⇧ off) KEY LOCK    │ LOCK (⇧ off) KEY LOCK    │ row 3
 #   │ TEMPO        FINE TEMPO  │ TEMPO        FINE TEMPO  │ faders
@@ -80,13 +80,13 @@ action = "LoopToggle"
 channel = 15
 deck = 0
 note = 48
-action = "Sync"
+action = "Master"
 
 [[midi.map]]
 channel = 15
 deck = 0
 note = 49
-action = "Master"
+action = "Sync"
 
 [[midi.map]]
 channel = 15
@@ -232,13 +232,13 @@ action = "LoopToggle"
 channel = 15
 deck = 1
 note = 50
-action = "Sync"
+action = "Master"
 
 [[midi.map]]
 channel = 15
 deck = 1
 note = 51
-action = "Master"
+action = "Sync"
 
 [[midi.map]]
 channel = 15

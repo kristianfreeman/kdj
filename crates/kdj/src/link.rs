@@ -9,12 +9,14 @@
 use std::sync::Arc;
 
 use kdj_engine::Engine;
-use kdj_engine::session::{self, Session};
+use kdj_engine::session::{self, Master, Session};
 use kdj_engine::sync::QUANTUM;
 use rusty_link::{AblLink, SessionState};
 
 pub struct LinkDriver {
     link: Arc<AblLink>,
+    /// MASTER across the kdjs on the session (the network tells the others).
+    master: Arc<Master>,
     state: SessionState,
     clock: ClockFilter,
     sample_clock: u64,
@@ -22,8 +24,8 @@ pub struct LinkDriver {
 
 impl LinkDriver {
     /// Not realtime-safe: call before starting audio.
-    pub fn new(link: Arc<AblLink>, sample_rate: u32) -> Self {
-        Self { link, state: SessionState::new(), clock: ClockFilter::new(sample_rate), sample_clock: 0 }
+    pub fn new(link: Arc<AblLink>, master: Arc<Master>, sample_rate: u32) -> Self {
+        Self { link, master, state: SessionState::new(), clock: ClockFilter::new(sample_rate), sample_clock: 0 }
     }
 
     /// Before rendering a block: sync the decks to the session.
@@ -33,7 +35,7 @@ impl LinkDriver {
         self.link.capture_audio_session_state(&mut self.state);
         let peers = Some(u32::try_from(self.link.num_peers()).unwrap_or(u32::MAX));
         let mut at = LinkAt { state: &mut self.state, heard: host + latency_us };
-        if session::drive(engines, &mut at, peers) {
+        if session::drive(engines, &mut at, peers, &self.master) {
             self.link.commit_audio_session_state(&self.state);
         }
     }

@@ -95,7 +95,8 @@ pub fn lit(action: Action, s: &Snapshot) -> Option<bool> {
         Action::Lock => s.locked,
         // At the cue point (or previewing it), as the screen's CUE shows.
         Action::Cue => s.previewing || (!s.playing && s.track_frames > 0 && (s.pos - s.cue).abs() < 1.0),
-        Action::Sync => s.sync == SyncMode::Follow,
+        // The master is in sync too, as on a CDJ.
+        Action::Sync => s.sync != SyncMode::Off,
         Action::Master => s.sync == SyncMode::Lead,
         Action::KeyLock => s.keylock,
         Action::Quantize => s.quantize,

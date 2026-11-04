@@ -94,7 +94,7 @@ impl Sim {
         let session = &mut self.session;
         crate::alloc_guard::forbid(|| {
             if let Some((s, peers)) = session {
-                session::drive(std::slice::from_mut(engine), s, *peers);
+                session::drive(std::slice::from_mut(engine), s, *peers, &session::Master::default());
             }
             engine.process(out);
         });

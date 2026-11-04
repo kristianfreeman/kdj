@@ -57,7 +57,8 @@ pub enum Action {
     HotCue8,
     /// Follow the shared timeline (Ableton Link): tempo and bar phase.
     Sync,
-    /// Lead the shared timeline: this deck's tempo becomes everyone's.
+    /// Lead the shared timeline: this deck's tempo becomes everyone's. Taken,
+    /// never turned off: another deck takes it.
     Master,
     /// Jump by the current loop size; moves the loop with you if one is active.
     BeatJumpForward,

@@ -24,6 +24,10 @@ const MAX_BEND: f64 = 0.02;
 /// Past this the driver re-asserts the master's phase. Drift comes from nudging the master or
 /// changing its tempo, whose sound follows the stretcher's latency later.
 pub const MASTER_DRIFT_BEATS: f64 = 0.005;
+/// A deck taking MASTER while fitting the timeline leads once it's this
+/// close (beats): well inside `MASTER_DRIFT_BEATS`, so taking over doesn't
+/// move the timeline.
+pub const JOINED_BEATS: f64 = 0.002;
 /// Furthest a follower stretches to match tempo, after folding to the
 /// nearest half or double: beyond this it holds tempo and doesn't lock.
 const MAX_STRETCH: f64 = 0.5;
@@ -45,7 +49,8 @@ pub enum SyncMode {
     Off,
     /// Match the timeline's tempo and bar phase.
     Follow,
-    /// Set the timeline's tempo (and its phase, on engaging).
+    /// Set the timeline's tempo (and its phase, taking over when not on
+    /// SYNC). In sync too: one deck at a time, on every kdj.
     Lead,
 }
 

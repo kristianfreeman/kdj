@@ -104,8 +104,24 @@ struct LinkState {
     phase: Option<f64>,
     /// Beats this deck has been nudged off the timeline while following:
     /// SYNC holds it there instead of pulling it back (a grid a few ms off
-    /// stays fixed). Cleared by SYNC, MASTER, or a new track.
+    /// stays fixed), and on taking MASTER it leads from there. Cleared by
+    /// SYNC, MASTER on a deck not synced, or a new track.
     offset: f64,
+    taking: Taking,
+}
+
+/// How a deck came to MASTER (see `Engine::take_master`).
+#[derive(Clone, Copy, Debug, Default)]
+struct Taking {
+    /// Just took it: the driver hands every other deck back to SYNC.
+    took: bool,
+    /// Fitting the timeline first, as SYNC would (it took MASTER while synced
+    /// but not yet in phase: stopped, say); it leads once in phase, so the
+    /// decks already playing aren't moved.
+    join: bool,
+    /// Took it while stopped (getting it ready) and hasn't played since: it
+    /// keeps MASTER though stopped.
+    held: bool,
 }
 
 /// What a deck on MASTER tells the timeline.
@@ -411,9 +427,10 @@ impl Engine {
         self.link.timeline = timeline;
     }
 
-    /// What this deck tells the timeline, if it's on MASTER.
+    /// What this deck tells the timeline, if it's on MASTER (and not still
+    /// fitting it).
     pub fn lead(&mut self) -> Option<Lead> {
-        if self.link.mode != SyncMode::Lead || self.track.is_none() {
+        if self.link.mode != SyncMode::Lead || self.link.taking.join || self.track.is_none() {
             return None;
         }
         let bpm = self.grid.bpm * self.base_rate();
@@ -421,17 +438,60 @@ impl Engine {
             return Some(Lead { bpm, beat: None, align: false });
         }
         let align = std::mem::take(&mut self.link.align_pending);
-        Some(Lead { bpm, beat: Some(self.grid.beat_at(self.pos)), align })
+        // Less any nudge it brought from SYNC: the timeline stays where the
+        // other decks are, which is how it sounded.
+        Some(Lead { bpm, beat: Some(self.grid.beat_at(self.pos) - self.link.offset), align })
     }
 
-    /// Another deck took MASTER: keep following it instead, like a CDJ.
+    /// Another deck took MASTER: keep following it instead, like a CDJ, from
+    /// right where it is (a nudge it had stays).
     pub const fn yield_master(&mut self) {
         if matches!(self.link.mode, SyncMode::Lead) {
             self.link.mode = SyncMode::Follow;
             self.link.align_pending = false;
             self.link.locked = false;
-            self.link.offset = 0.0;
+            self.link.taking.took = false;
+            self.link.taking.join = false;
+            self.link.taking.held = false;
         }
+    }
+
+    /// Take MASTER. It's never given up by pressing it again: another deck
+    /// takes it. A deck on SYNC leads from where it is (in phase, or once
+    /// it's fitted the timeline); one that isn't brings the timeline to it.
+    pub(crate) const fn take_master(&mut self) {
+        match self.link.mode {
+            SyncMode::Lead => return,
+            SyncMode::Follow if self.link.locked => {}
+            SyncMode::Follow => self.link.taking.join = true,
+            SyncMode::Off => {
+                self.link.offset = 0.0;
+                self.link.align_pending = true;
+            }
+        }
+        self.link.mode = SyncMode::Lead;
+        self.link.taking.took = true;
+        self.link.taking.held = !self.playing;
+    }
+
+    /// Whether this deck took MASTER since last asked.
+    pub(crate) const fn took_master(&mut self) -> bool {
+        std::mem::replace(&mut self.link.taking.took, false)
+    }
+
+    pub(crate) fn is_master(&self) -> bool {
+        self.link.mode == SyncMode::Lead
+    }
+
+    /// On MASTER and stopped (or empty), not just given it: it hands over to
+    /// a deck playing on SYNC.
+    pub(crate) fn master_stopped(&self) -> bool {
+        self.is_master() && !self.link.taking.held && !(self.playing && self.track.is_some())
+    }
+
+    /// Playing in phase on SYNC: it can take MASTER without moving anyone.
+    pub(crate) fn can_take_master(&self) -> bool {
+        self.link.mode == SyncMode::Follow && self.link.locked && self.playing && self.track.is_some()
     }
 
     /// Fill `out` (interleaved stereo) with the next block of audio.
@@ -559,12 +619,14 @@ impl Engine {
     /// (one jump if far out, gentle bends after that), then hold the beat.
     fn follow_timeline(&mut self) {
         self.link.rate = None;
+        self.link.taking.held &= !self.playing;
         self.link.phase = self
             .link
             .timeline
             .filter(|_| self.playing && self.track.is_some())
             .map(|tl| sync::beat_phase(self.grid.beat_at(self.here()), self.grid.bpm, &tl));
-        let following = self.link.mode == SyncMode::Follow && self.playing && self.track.is_some();
+        let joining = self.link.mode == SyncMode::Lead && self.link.taking.join;
+        let following = (self.link.mode == SyncMode::Follow || joining) && self.playing && self.track.is_some();
         let Some(tl) = self.link.timeline.filter(|_| following) else {
             self.link.error = 0.0;
             self.link.locked = false;
@@ -574,6 +636,11 @@ impl Engine {
         let beat = self.grid.beat_at(self.here()) - self.link.offset;
         let f = sync::follow(beat, self.grid.bpm, &tl, quantum.unwrap_or(QUANTUM));
         self.link.locked = true;
+        if joining && f.snap_beats.is_none() && f.error.abs() < sync::JOINED_BEATS {
+            // In phase: lead from here on, keeping what's left as its offset.
+            self.link.taking.join = false;
+            self.link.offset += f.error;
+        }
         // The readout shows the synced tempo, and keeps it if SYNC goes off
         // (the fine fader, ignored meanwhile, then counts again from there).
         self.tempo_pct = (f.base_rate - 1.0).mul_add(100.0, -self.fine_pct);
@@ -810,15 +877,14 @@ impl Engine {
             Action::Unlock => self.locked = false,
             Action::Quantize => self.quantize = !self.quantize,
             Action::Sync => {
-                self.link.mode = if self.link.mode == SyncMode::Follow { SyncMode::Off } else { SyncMode::Follow };
-                self.link.locked = false;
-                self.link.offset = 0.0;
+                // The master is the timeline's own: SYNC leaves it be.
+                if self.link.mode != SyncMode::Lead {
+                    self.link.mode = if self.link.mode == SyncMode::Follow { SyncMode::Off } else { SyncMode::Follow };
+                    self.link.locked = false;
+                    self.link.offset = 0.0;
+                }
             }
-            Action::Master => {
-                self.link.mode = if self.link.mode == SyncMode::Lead { SyncMode::Off } else { SyncMode::Lead };
-                self.link.offset = 0.0;
-                self.link.align_pending = self.link.mode == SyncMode::Lead;
-            }
+            Action::Master => self.take_master(),
             Action::GridAnchorHere
             | Action::GridNudgeEarlier
             | Action::GridNudgeLater

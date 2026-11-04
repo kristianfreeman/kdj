@@ -71,9 +71,15 @@ Every deck joins the Link session on the local network (`--no-link` to
 opt out), so two Pis, or a deck and Ableton Live, share tempo and phase over
 Ethernet.
 
-- MASTER (M) makes a deck's tempo the session's tempo, and lines the
-  session's bars up with it when it takes over. One deck is master at a
-  time: taking it hands the other deck back to SYNC. A stopped master only
+- MASTER (M) makes a deck's tempo the session's tempo. One deck is master
+  on the whole network, like CDJs: taking it, on this kdj or another, hands
+  the old master back to SYNC. Pressing it again does nothing (another deck
+  takes it), and so does SYNC on the master. A deck on SYNC takes over from
+  where it is, nudges and all, so nothing playing moves (one that's stopped
+  fits the session when it starts, then leads); a deck not on SYNC brings
+  the session's bars to it. When the master stops, a deck playing on SYNC
+  takes it, so moving on to the next track moves MASTER with it; a deck
+  given MASTER while stopped keeps it till it plays. A stopped master only
   sets the tempo; nudging the master moves the session's phase, not its tempo.
 - SYNC (S) follows the session: it matches the tempo (or its half or double:
   a 70 BPM grid follows 140) and, when it goes on or the deck starts, lines

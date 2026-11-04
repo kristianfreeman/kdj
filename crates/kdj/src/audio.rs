@@ -26,11 +26,11 @@ pub trait BlockHook: Send {
 }
 
 /// SYNC and MASTER between the decks in this process, without a network.
-pub struct LocalHook(pub kdj_engine::session::LocalSession);
+pub struct LocalHook(pub kdj_engine::session::LocalSession, pub kdj_engine::session::Master);
 
 impl BlockHook for LocalHook {
     fn before(&mut self, engines: &mut [Engine], _latency_us: i64) {
-        kdj_engine::session::drive(engines, &mut self.0, None);
+        kdj_engine::session::drive(engines, &mut self.0, None, &self.1);
     }
 
     fn after(&mut self, frames: u64) {
