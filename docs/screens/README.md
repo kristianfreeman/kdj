@@ -90,6 +90,10 @@ Every screen of the deck at the panel's own 800×480, drawn by the real UI code 
 
 ![Track list](browser-track-list.png)
 
+**Mixing in key**: Keys on the Camelot wheel; ones that go with the playing track's (beside KEY) marked: the same key on a block, a neighbour boxed.
+
+![Mixing in key](browser-mixing-in-key.png)
+
 **Empty playlist**: Says so instead of a blank screen.
 
 ![Empty playlist](browser-empty-playlist.png)

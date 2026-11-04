@@ -32,6 +32,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use kdj_engine::session::Master;
+use kdj_library::key::Camelot;
 use socket2::{Domain, Protocol, SockRef, Socket, Type};
 
 /// The hello group and port.
@@ -77,6 +78,29 @@ struct Hello {
     /// master is stopped and handing over. Missing from an older kdj's.
     master: u64,
     master_stopped: bool,
+    /// What each of its decks has on, in deck order. Missing from an older
+    /// kdj's.
+    on_deck: Vec<OnDeck>,
+}
+
+/// What's on a deck, for marking the tracks that go with it in key.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OnDeck {
+    /// The track's key, if it has one.
+    pub key: Option<Camelot>,
+    pub playing: bool,
+    pub master: bool,
+}
+
+impl OnDeck {
+    /// One byte: the key's code (0 for none), then playing and master.
+    fn encode(self) -> u8 {
+        self.key.map_or(0, Camelot::code) | (u8::from(self.playing) << 6) | (u8::from(self.master) << 7)
+    }
+
+    const fn decode(b: u8) -> Self {
+        Self { key: Camelot::from_code(b & 0x3f), playing: b & 0x40 != 0, master: b & 0x80 != 0 }
+    }
 }
 
 /// A track on a deck that came, or is coming, from a source on a kdj: so
@@ -122,6 +146,9 @@ fn encode_hello(h: &Hello) -> Vec<u8> {
     }
     b.extend_from_slice(&h.master.to_be_bytes());
     b.push(u8::from(h.master_stopped));
+    let on_deck = &h.on_deck[..h.on_deck.len().min(MAX_DECKS)];
+    b.push(u8::try_from(on_deck.len()).unwrap_or(0));
+    b.extend(on_deck.iter().map(|d| d.encode()));
     b
 }
 
@@ -173,7 +200,22 @@ fn decode_hello(b: &[u8]) -> Option<Hello> {
     let using = (0..uses).map(|_| Some(Use { kdj: r.name()?, source: r.u32()? })).collect::<Option<_>>()?;
     let master = r.u64().unwrap_or(0);
     let master_stopped = r.u8().is_some_and(|b| b != 0);
-    Some(Hello { name, first, count, port, stamp, controller, library, library_stamp, using, master, master_stopped })
+    let on_deck =
+        r.u8().and_then(|n| r.take(n.into())).map_or_else(Vec::new, |b| b.iter().map(|&b| OnDeck::decode(b)).collect());
+    Some(Hello {
+        name,
+        first,
+        count,
+        port,
+        stamp,
+        controller,
+        library,
+        library_stamp,
+        using,
+        master,
+        master_stopped,
+        on_deck,
+    })
 }
 
 /// A MIDI or LED message; None if it's too long to be one.
@@ -296,6 +338,7 @@ struct State {
     /// The kdj last logged as holding MASTER elsewhere.
     master_logged: Option<String>,
     using: Vec<Use>,
+    on_deck: Vec<OnDeck>,
 }
 
 /// Something to run on a controller message from another kdj.
@@ -383,6 +426,11 @@ impl Net {
         peers
     }
 
+    /// What's on the other kdjs' decks.
+    pub fn others_on_deck(&self) -> Vec<OnDeck> {
+        self.state().peers.iter().flat_map(|p| p.hello.on_deck.iter().copied()).collect()
+    }
+
     /// This kdj's name on the network.
     pub fn name(&self) -> &str {
         &self.name
@@ -407,6 +455,19 @@ impl Net {
             let mut s = self.state();
             let changed = s.using != using;
             s.using = using;
+            changed
+        };
+        if changed {
+            self.say_hello();
+        }
+    }
+
+    /// Say what's on this kdj's decks.
+    pub fn set_on_deck(&self, on_deck: Vec<OnDeck>) {
+        let changed = {
+            let mut s = self.state();
+            let changed = s.on_deck != on_deck;
+            s.on_deck = on_deck;
             changed
         };
         if changed {
@@ -504,6 +565,7 @@ impl Net {
             using: s.using.clone(),
             master: self.master.ours().0,
             master_stopped: self.master.ours().1,
+            on_deck: s.on_deck.clone(),
         }
     }
 
@@ -600,7 +662,7 @@ impl Net {
 
     /// Take a hello `from` somewhere. True if it's from a kdj not heard
     /// till now.
-    fn heard(&self, h: Hello, from: SocketAddr) -> bool {
+    fn heard(&self, mut h: Hello, from: SocketAddr) -> bool {
         let addr = SocketAddr::new(from.ip(), h.port);
         let mine = h.port == self.port() && h.name == self.name;
         if mine {
@@ -619,7 +681,12 @@ impl Net {
                 p.addr = addr;
             }
             let moved = (p.hello.first, p.hello.count) != (h.first, h.count);
+            // What's on its decks changes all the time and needs nothing
+            // shown or sent again (see `others_on_deck`).
+            let on_deck = std::mem::take(&mut h.on_deck);
+            p.hello.on_deck.clear();
             let changed = p.hello != h;
+            h.on_deck = on_deck;
             p.hello = h;
             p.seen = now;
             if moved {
@@ -824,14 +891,23 @@ mod tests {
             using: vec![Use { kdj: "kdj-elm-fox".into(), source: 2 }],
             master: (3 << 32) | 9,
             master_stopped: true,
+            on_deck: vec![
+                OnDeck { key: Camelot::parse("Fm"), playing: true, master: true },
+                OnDeck { key: Camelot::parse("E"), playing: false, master: false },
+                OnDeck::default(),
+            ],
         };
         assert_eq!(decode(&encode_hello(&h)), Some(Packet::Hello(h.clone())));
         let serve = Hello { count: 0, using: Vec::new(), ..h.clone() };
         assert_eq!(decode(&encode_hello(&serve)), Some(Packet::Hello(serve)));
         let mut older = encode_hello(&h);
-        older.truncate(older.len() - 9);
+        older.truncate(older.len() - 4);
         let Some(Packet::Hello(older)) = decode(&older) else { panic!("an older kdj's hello still decodes") };
-        assert_eq!((older.master, older.master_stopped), (0, false), "it claims no MASTER");
+        assert_eq!(older.on_deck, [], "it says nothing about its decks");
+        let mut oldest = encode_hello(&older);
+        oldest.truncate(oldest.len() - 10);
+        let Some(Packet::Hello(oldest)) = decode(&oldest) else { panic!("an even older kdj's hello still decodes") };
+        assert_eq!((oldest.master, oldest.master_stopped), (0, false), "it claims no MASTER");
         let long = Hello { name: "é".repeat(40), ..h };
         let Some(Packet::Hello(cut)) = decode(&encode_hello(&long)) else { panic!("a long name still decodes") };
         assert_eq!(cut.name, "é".repeat(31), "cut to 63 bytes, on a character boundary");
@@ -860,6 +936,7 @@ mod tests {
             using: Vec::new(),
             master: 0,
             master_stopped: false,
+            on_deck: Vec::new(),
         };
         let cable = SocketAddr::from(([169, 254, 9, 9], PORT));
         let wifi = SocketAddr::from(([10, 9, 9, 9], PORT));

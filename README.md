@@ -45,6 +45,15 @@ On macOS this needs SDL2: `brew install sdl2`.
 In the browser: ↑/↓ and PgUp/PgDn move, ↵ opens or loads, → opens, ←
 backs out, Tab closes. Play, cue and anything not listed still reach the deck.
 
+The browser shows keys on the Camelot wheel ("8A"); Settings › Display ›
+Key names switches to Rekordbox's names ("Am"). It marks the tracks that mix
+in key with the one you'd mix into: the track playing on another deck
+(MASTER first, on any kdj), else the one loaded on another deck, else the
+one on this deck. That key sits beside the KEY heading. A track in the same
+key has its key on a solid amber block, and one a step away on the wheel (an
+hour either way, or the relative major or minor) has it boxed in amber.
+Clashing keys stay plain and grey.
+
 Override any of these in a TOML file passed with `--keymap`:
 
 ```toml

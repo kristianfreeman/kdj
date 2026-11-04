@@ -258,11 +258,17 @@ fn browser_stories(book: &mut Book) -> Result<()> {
     let mut sim = playing(&Arc::new(silent_track(240)), 0.5)?;
     let snap = sim.snapshot();
     let playlists = "USB · REKORDBOX/PBAR CURRENT/HOUSE NYC/HOUSE PLAYLISTS";
-    let stories: [(&str, &str, &str, isize); 6] = [
+    let stories: [(&str, &str, &str, isize); 7] = [
         ("Sources", "Two sticks plugged in.", "", 0),
         ("A stick's top level", "All tracks, then its playlist folders.", "USB · REKORDBOX", 1),
         ("Playlist folder", "Tracks found on the stick, and how many are missing.", playlists, 1),
         ("Track list", "All tracks: the loaded one is marked, the highlight filled.", "USB · REKORDBOX/All tracks", 3),
+        (
+            "Mixing in key",
+            "Keys on the Camelot wheel; ones that go with the playing track's (beside KEY) marked: the same key on a block, a neighbour boxed.",
+            "USB · REKORDBOX/All tracks",
+            7,
+        ),
         ("Empty playlist", "Says so instead of a blank screen.", &format!("{playlists}/Pbar Nov 23"), 0),
         ("Deep path", "The path is trimmed from the left.", &format!("{playlists}/Horoom April 24"), 0),
     ];
@@ -271,6 +277,9 @@ fn browser_stories(book: &mut Book) -> Result<()> {
         b.move_by(cursor);
         if name == "Track list" {
             b.loaded = libs.first().and_then(|l| l.entries.get(1)).map(kdj_library::nav::track_id);
+        }
+        if name == "Mixing in key" {
+            b.mixing_into = kdj_library::key::Camelot::parse("Am");
         }
         let file = book.add("Browser", name, note);
         book.screen.save_browser_png(&file, &mut b, &snap)?;

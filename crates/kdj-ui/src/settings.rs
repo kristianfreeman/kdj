@@ -65,6 +65,8 @@ pub enum Key {
     Mapping,
     Learn,
     Zoom,
+    /// Keys in the browser as Camelot ("8A") or by name ("Am").
+    KeyNames,
     PhaseMeter,
     PerfOverlay,
     Version,
@@ -450,6 +452,8 @@ pub struct Prefs {
     pub led_colour: usize,
     /// Index into the zoom levels (8, 16, 32, 64 beats).
     pub zoom: usize,
+    /// Keys in the browser as Camelot ("8A"), else as Rekordbox names them.
+    pub camelot: bool,
     pub phase_meter: bool,
     pub perf_overlay: bool,
 }
@@ -468,6 +472,7 @@ impl Default for Prefs {
             bar_sync: true,
             led_colour: 0,
             zoom: 1,
+            camelot: true,
             phase_meter: true,
             perf_overlay: false,
         }
@@ -661,6 +666,12 @@ fn display(p: &Prefs) -> Vec<Row> {
             "Waveform zoom",
             "Beats across the waveform for a new track; Z / X zoom while playing.",
             choice(&["8", "16", "32", "64"], p.zoom),
+        ),
+        row(
+            Key::KeyNames,
+            "Key names",
+            "In the browser: Camelot, or as Rekordbox names them.",
+            choice(&["8A", "Am"], usize::from(!p.camelot)),
         ),
         row(
             Key::PhaseMeter,

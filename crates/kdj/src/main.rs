@@ -48,7 +48,9 @@ use kdj_engine::analysis::{self, synth::SynthSpec};
 use kdj_engine::keymap::{Keymap, Layer};
 use kdj_engine::midimap::MidiMap;
 use kdj_engine::session::{LocalSession, Master};
+use kdj_engine::sync::SyncMode;
 use kdj_engine::{Action, Edge, Engine, EngineConfig, EngineHandle, InputSender, Snapshot, Track};
+use kdj_library::key::Camelot;
 use kdj_library::nav::{self, Node};
 use kdj_library::shared::Remote;
 use kdj_library::{anlz, library};
@@ -144,6 +146,8 @@ struct Loaded {
     track: Result<Track, String>,
     /// The browser entry it came from (`nav::track_id`), to mark as loaded.
     entry_id: Option<u64>,
+    /// Its key, as the library has it.
+    key: Option<Camelot>,
     /// The other kdj's source it came from.
     from: Option<net::Use>,
 }
@@ -153,6 +157,7 @@ struct LoadJob {
     deck: usize,
     what: Fetch,
     loaded_id: Option<u64>,
+    key: Option<Camelot>,
 }
 
 /// Where a track to load is.
@@ -217,8 +222,15 @@ fn load_in_background(job: LoadJob, sr: u32, tx: mpsc::Sender<Loaded>) {
             t
         });
         let track = track.map_err(|e| format!("{e:#}"));
-        let _ = tx.send(Loaded { deck: job.deck, track, entry_id: job.loaded_id, from });
+        let _ = tx.send(Loaded { deck: job.deck, track, entry_id: job.loaded_id, key: job.key, from });
     });
+}
+
+/// The key to mix into, browsing for a deck holding a track in `here`: a
+/// track playing on another deck (MASTER first), else one that's loaded
+/// there, else the one on this deck.
+fn mix_into(elsewhere: impl Iterator<Item = net::OnDeck>, here: Option<Camelot>) -> Option<Camelot> {
+    elsewhere.filter(|d| d.key.is_some()).max_by_key(|d| (d.playing, d.master)).and_then(|d| d.key).or(here)
 }
 
 /// What Rekordbox gave a load, for the log.
@@ -235,7 +247,7 @@ fn synth_in_background(deck: usize, bpm: f64, sr: u32, tx: mpsc::Sender<Loaded>)
         let seed = u32::try_from(deck).map_or(1, |d| d.saturating_add(1));
         let spec = SynthSpec { sample_rate: sr, bars: 160, bpm, seed, ..Default::default() };
         let (t, _) = analysis::build(format!("Synthetic hardgroove {bpm} bpm"), analysis::synth::render(&spec), sr);
-        let _ = tx.send(Loaded { deck, track: Ok(t), entry_id: None, from: None });
+        let _ = tx.send(Loaded { deck, track: Ok(t), entry_id: None, key: None, from: None });
     });
 }
 
@@ -289,6 +301,8 @@ struct Slot {
     /// The track on the deck, once the engine has taken it.
     current: Option<Arc<Track>>,
     loaded_id: Option<u64>,
+    /// Its key, as the library has it.
+    key: Option<Camelot>,
     /// A track handed to the engine and not yet on the deck. The engine
     /// still drops it if the deck started playing in the meantime.
     pending: Option<Pending>,
@@ -301,6 +315,7 @@ struct Slot {
 struct Pending {
     track: Arc<Track>,
     entry_id: Option<u64>,
+    key: Option<Camelot>,
     since: Instant,
     from: Option<net::Use>,
 }
@@ -649,6 +664,26 @@ impl App {
         self.show_sharing(net.name(), &peers);
     }
 
+    /// Tell the other kdjs what's on the decks here, and mark the tracks in
+    /// the browser that go in key with the one to mix into.
+    fn follow_keys(&mut self) {
+        let here: Vec<_> = self
+            .slots
+            .iter_mut()
+            .map(|s| {
+                let snap = s.deck.snapshot();
+                net::OnDeck { key: s.key, playing: snap.playing, master: snap.sync == SyncMode::Lead }
+            })
+            .collect();
+        let others = self.net.as_ref().map_or_else(Vec::new, |net| {
+            net.set_on_deck(here.clone());
+            net.others_on_deck()
+        });
+        let elsewhere = here.iter().enumerate().filter(|&(i, _)| i != self.focus).map(|(_, &d)| d).chain(others);
+        self.browser.mixing_into = mix_into(elsewhere, here.get(self.focus).and_then(|d| d.key));
+        self.browser.camelot = self.settings.choice(settings::Key::KeyNames) != Some(1);
+    }
+
     /// Each deck's "from B", and on this kdj's decks a warning while another
     /// deck depends on a stick here (loaded from it, or loading).
     fn show_sharing(&mut self, me: &str, peers: &[net::PeerInfo]) {
@@ -723,7 +758,7 @@ impl App {
                     Fetch::File { path: e.audio.clone(), anlz: Some(e.anlz.clone()) }
                 };
                 self.slots[deck].fetching = what.from();
-                let job = LoadJob { deck, what, loaded_id: Some(nav::track_id(e)) };
+                let job = LoadJob { deck, what, loaded_id: Some(nav::track_id(e)), key: Camelot::parse(&e.key) };
                 load_in_background(job, self.sample_rate, self.load_tx.clone());
             }
             (Node::Track(..), None) => {}
@@ -742,7 +777,7 @@ impl App {
             return;
         }
         self.status = format!("Analysing {}…", file_name(&p));
-        let job = LoadJob { deck: self.focus, what: Fetch::File { path: p, anlz: None }, loaded_id: None };
+        let job = LoadJob { deck: self.focus, what: Fetch::File { path: p, anlz: None }, loaded_id: None, key: None };
         load_in_background(job, self.sample_rate, self.load_tx.clone());
     }
 
@@ -791,8 +826,8 @@ impl App {
                     refuses_load(&slot.deck.snapshot()).unwrap_or(STOP_TO_LOAD).clone_into(&mut self.status);
                     return;
                 }
-                let (entry_id, from) = (loaded.entry_id, loaded.from);
-                slot.pending = Some(Pending { track: t, entry_id, since: Instant::now(), from });
+                let (entry_id, key, from) = (loaded.entry_id, loaded.key, loaded.from);
+                slot.pending = Some(Pending { track: t, entry_id, key, since: Instant::now(), from });
             }
             Err(e) => self.status = format!("Couldn't load: {e}"),
         }
@@ -810,6 +845,7 @@ impl App {
                 slot.ui.set_track(&p.track);
                 slot.current = Some(p.track);
                 slot.loaded_id = p.entry_id;
+                slot.key = p.key;
                 slot.from = p.from;
                 // Show where it's from (and tell the other kdjs) right away.
                 self.net_shown.0 = u64::MAX;
@@ -897,6 +933,7 @@ fn run() -> Result<()> {
         }
         app.follow_net();
         app.follow_network();
+        app.follow_keys();
         if let Ok(scan) = scan_rx.try_recv() {
             app.take_libraries(scan);
         }
@@ -1131,7 +1168,7 @@ fn start_loading(args: &Args, sample_rate: u32, load_tx: &mpsc::Sender<Loaded>) 
             synth_in_background(deck, bpm, sample_rate, load_tx.clone());
         }
     } else if let Some(p) = &args.track {
-        let job = LoadJob { deck: 0, what: Fetch::File { path: p.clone(), anlz: None }, loaded_id: None };
+        let job = LoadJob { deck: 0, what: Fetch::File { path: p.clone(), anlz: None }, loaded_id: None, key: None };
         load_in_background(job, sample_rate, load_tx.clone());
         return format!("Analysing {}…", file_name(p));
     }
@@ -1202,6 +1239,7 @@ impl Screen {
                     ui: Ui::new(gl, self.es, scale)?,
                     current: None,
                     loaded_id: None,
+                    key: None,
                     pending: None,
                     from: None,
                     fetching: None,
@@ -1529,4 +1567,23 @@ fn print_keys(km: &Keymap) {
         line.push_str(&item);
     }
     eprintln!("{line}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_key_to_mix_into_is_what_plays_elsewhere() {
+        let key = |s| Camelot::parse(s);
+        let deck = |k, playing, master| net::OnDeck { key: key(k), playing, master };
+        let here = key("C");
+        assert_eq!(mix_into([].into_iter(), here), here, "alone: this deck's track");
+        assert_eq!(mix_into([deck("", true, true)].into_iter(), here), here, "a deck without a key says nothing");
+        assert_eq!(mix_into([deck("Fm", false, false)].into_iter(), here), key("Fm"), "a track loaded elsewhere");
+        let decks = [deck("Fm", false, false), deck("Am", true, false), deck("E", true, true)];
+        assert_eq!(mix_into(decks.into_iter(), here), key("E"), "playing, MASTER first");
+        let decks = [deck("Am", true, false), deck("E", false, true)];
+        assert_eq!(mix_into(decks.into_iter(), here), key("Am"), "playing over a stopped MASTER");
+    }
 }

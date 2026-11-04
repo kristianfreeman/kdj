@@ -7,6 +7,7 @@
 use std::fmt::Write;
 
 use kdj_engine::{Action, Snapshot};
+use kdj_library::key::{Camelot, Fit};
 
 use crate::draw::{Frame, Rgba, count_f32, grey, whole};
 use crate::scene::{HEIGHT, WIDTH, remaining_secs};
@@ -17,6 +18,12 @@ const BG: Rgba = grey(11);
 const FG: Rgba = grey(242);
 const DIM: Rgba = grey(140);
 const FAINT: Rgba = grey(70);
+/// Keys that mix with the one playing: amber, which stays apart from the
+/// greys and from red and green alike for the colourblind. The shape
+/// (block or box) says the same, so the colour only adds to it.
+const MATCH: Rgba = [255, 178, 36, 255];
+/// The same on the highlighted (light) row, dark enough to read on it.
+const MATCH_ON_LIGHT: Rgba = [150, 88, 0, 255];
 
 pub const ROWS: usize = 12;
 pub const ROW_H: f32 = 30.0;
@@ -32,6 +39,8 @@ pub struct Row {
     pub title: String,
     pub artist: String,
     pub key: String,
+    /// `key` on the Camelot wheel, if it names one.
+    pub camelot: Option<Camelot>,
     pub bpm: Option<f64>,
     pub secs: Option<f64>,
     /// Identifies the track, to mark the one on the deck.
@@ -70,6 +79,10 @@ pub struct Browser {
     levels: Vec<Level>,
     /// The track on the deck, by `Row::id`.
     pub loaded: Option<u64>,
+    /// The key of the track to mix into: tracks that go with it are marked.
+    pub mixing_into: Option<Camelot>,
+    /// Keys as Camelot ("8A"), else as the library names them ("Am").
+    pub camelot: bool,
     pub scanning: bool,
     text: String,
 }
@@ -78,7 +91,7 @@ impl Browser {
     /// Empty and waiting for the first library scan.
     #[must_use]
     pub fn new(open: bool) -> Self {
-        Self { open, scanning: true, ..Default::default() }
+        Self { open, scanning: true, camelot: true, ..Default::default() }
     }
 
     /// Start over at `root`.
@@ -158,7 +171,7 @@ impl Browser {
         if let Some(l) = self.levels.last() {
             let tracks = l.items.iter().any(|i| matches!(i, Item::Track(_)));
             if tracks {
-                column_heads(f, atlas);
+                column_heads(f, atlas, &mut self.text, self.mixing_into, self.camelot);
             }
         }
         f.rect(16.0, LIST_Y - 2.0, WIDTH - 32.0, 1.0, FAINT);
@@ -222,7 +235,8 @@ impl Browser {
                 Item::Folder { name, detail } => folder_row(f, atlas, y, (name, detail), selected),
                 Item::Track(row) => {
                     let loaded = self.loaded == Some(row.id);
-                    track_row(f, atlas, &mut self.text, y, row, (selected, loaded));
+                    let fit = row.camelot.zip(self.mixing_into).and_then(|(k, into)| k.fit(into));
+                    track_row(f, atlas, &mut self.text, y, row, (selected, loaded, fit, self.camelot));
                 }
             }
         }
@@ -279,11 +293,16 @@ impl Browser {
     }
 }
 
-/// Column heads, for track lists.
-fn column_heads(f: &mut Frame, atlas: &Atlas) {
+/// Column heads, for track lists. The key being mixed into sits beside KEY,
+/// marked as a matching row's key is.
+fn column_heads(f: &mut Frame, atlas: &Atlas, text: &mut String, mixing_into: Option<Camelot>, camelot: bool) {
     atlas.draw(f, Style::Label, 24.0, 62.0, Align::Left, "TITLE", DIM);
     atlas.draw(f, Style::Label, CX_ARTIST, 62.0, Align::Left, "ARTIST", DIM);
-    atlas.draw(f, Style::Label, CX_KEY, 62.0, Align::Left, "KEY", DIM);
+    let w = atlas.draw(f, Style::Label, CX_KEY, 62.0, Align::Left, "KEY", DIM);
+    if let Some(k) = mixing_into {
+        key_name(text, Some(k), "", camelot);
+        key_mark(f, atlas, Style::Label, [CX_KEY + w + 12.0, 62.0, 48.0, 19.0], text, (Some(Fit::Same), MATCH, BG));
+    }
     atlas.draw(f, Style::Label, CX_BPM, 62.0, Align::Right, "BPM", DIM);
     atlas.draw(f, Style::Label, CX_TIME, 62.0, Align::Right, "TIME", DIM);
 }
@@ -303,8 +322,58 @@ fn folder_row(f: &mut Frame, atlas: &Atlas, y: f32, (name, detail): (&str, &str)
     f.tri([ax - 4.0, ay - 6.0], [ax - 4.0, ay + 6.0], [ax + 3.0, ay], fg);
 }
 
-/// A track row at `y`; `loaded` marks the one on the deck.
-fn track_row(f: &mut Frame, atlas: &Atlas, text: &mut String, y: f32, r: &Row, (selected, loaded): (bool, bool)) {
+/// `key` into `text`: as Camelot ("8A") if `camelot`, else by name; `raw`
+/// (the library's own name) for a key not on the wheel.
+fn key_name(text: &mut String, key: Option<Camelot>, raw: &str, camelot: bool) {
+    text.clear();
+    match key {
+        Some(k) if camelot => {
+            let _ = write!(text, "{k}");
+        }
+        Some(k) if raw.is_empty() => text.push_str(k.name()),
+        _ => text.push_str(raw),
+    }
+}
+
+/// A key, marked by how it fits the key being mixed into: the same key on a
+/// solid amber block, a neighbour boxed in amber, a clash (or no key to mix
+/// into) plain and grey. The shape carries it without the colour.
+/// `[x, baseline, top, height]` place the key and its box; `color` is the
+/// mark's and `bg` the row's background.
+fn key_mark(
+    f: &mut Frame,
+    atlas: &Atlas,
+    style: Style,
+    [x, base, top, h]: [f32; 4],
+    name: &str,
+    (fit, mark, bg): (Option<Fit>, Rgba, Rgba),
+) {
+    const PAD: f32 = 5.0;
+    let w = atlas.width_of(style, name) + PAD + PAD;
+    let color = match fit {
+        Some(Fit::Same) => {
+            f.rect(x - PAD, top, w, h, mark);
+            bg
+        }
+        Some(Fit::Near) => {
+            f.outline([x - PAD, top, w, h], 2.0, mark);
+            mark
+        }
+        None => return,
+    };
+    atlas.draw(f, style, x, base, Align::Left, name, color);
+}
+
+/// A track row at `y`; `loaded` marks the one on the deck, `fit` how its key
+/// goes with the one being mixed into, `camelot` how keys are named.
+fn track_row(
+    f: &mut Frame,
+    atlas: &Atlas,
+    text: &mut String,
+    y: f32,
+    r: &Row,
+    (selected, loaded, fit, camelot): (bool, bool, Option<Fit>, bool),
+) {
     let (fg, dim) = row_colors(selected);
     let base = y + 20.0;
     if loaded {
@@ -313,7 +382,13 @@ fn track_row(f: &mut Frame, atlas: &Atlas, text: &mut String, y: f32, r: &Row, (
     }
     atlas.draw_clipped(f, Style::Body, 24.0, base, CX_ARTIST - 36.0, &r.title, fg);
     atlas.draw_clipped(f, Style::Body, CX_ARTIST, base, CX_KEY - CX_ARTIST - 16.0, &r.artist, dim);
-    atlas.draw_clipped(f, Style::Body, CX_KEY, base, 44.0, &r.key, dim);
+    key_name(text, r.camelot, &r.key, camelot);
+    if fit.is_some() {
+        let (mark, bg) = if selected { (MATCH_ON_LIGHT, FG) } else { (MATCH, BG) };
+        key_mark(f, atlas, Style::Body, [CX_KEY, base, y + 4.0, ROW_H - 10.0], text, (fit, mark, bg));
+    } else {
+        atlas.draw_clipped(f, Style::Body, CX_KEY, base, 44.0, text, dim);
+    }
     text.clear();
     if let Some(b) = r.bpm {
         let _ = write!(text, "{b:.2}");
@@ -373,6 +448,7 @@ pub fn level_for(
                     title: e.title.clone(),
                     artist: e.artist.clone(),
                     key: e.key.clone(),
+                    camelot: Camelot::parse(&e.key),
                     bpm: e.bpm,
                     secs: e.secs,
                     id: nav::track_id(e),
@@ -389,6 +465,20 @@ pub fn level_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keys_read_as_camelot_or_by_name() {
+        let mut t = String::new();
+        let fm = Camelot::parse("Fm");
+        key_name(&mut t, fm, "Fm", true);
+        assert_eq!(t, "4A");
+        key_name(&mut t, fm, "Fm", false);
+        assert_eq!(t, "Fm", "as the library has it");
+        key_name(&mut t, fm, "", false);
+        assert_eq!(t, "Fm", "a key from another deck, by name");
+        key_name(&mut t, None, "Fx", true);
+        assert_eq!(t, "Fx", "not on the wheel: as it is");
+    }
 
     /// The touchscreen's way to the settings: open the browser (tap the
     /// title), then this.

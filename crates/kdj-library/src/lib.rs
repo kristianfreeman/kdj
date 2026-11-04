@@ -2,6 +2,7 @@
 
 pub mod anlz;
 pub mod files;
+pub mod key;
 pub mod library;
 pub mod nav;
 pub mod pdb;
