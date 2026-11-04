@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "kdj"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "assert_no_alloc",
@@ -1129,7 +1129,7 @@ dependencies = [
 
 [[package]]
 name = "kdj-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "assert_no_alloc",
@@ -1146,7 +1146,7 @@ dependencies = [
 
 [[package]]
 name = "kdj-flash"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1162,7 +1162,7 @@ dependencies = [
 
 [[package]]
 name = "kdj-library"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "binrw",
@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "kdj-sim"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "glow",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "kdj-ui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "fontdue",
