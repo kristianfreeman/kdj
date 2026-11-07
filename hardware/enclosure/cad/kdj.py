@@ -13,7 +13,8 @@ live/collisions.glb), and out/*.stl / out/*.step for printing.
 
 Coordinates: mm, Z up, the box's front-left-bottom corner at the origin; the
 screen faces up, flush with the top of the walls; the back wall is at max Y.
-TILT=15|30|45 shows it standing on that kickstand leg (default 30).
+The prototype sits on a printed stand at ANGLE degrees (default 30). KICKSTAND=1
+builds the folding-leg version instead, shown on its TILT=15|30|45 leg.
 """
 
 import json
@@ -85,15 +86,16 @@ PAD_T = 0.1                                 # the STEP's copper pads, proud of t
 # extent in z above the board's bottom, how far it reaches past the edge,
 # shape ("relief": no hole, a recess inside the plate so it stays covered),
 # and a pocket (w, h) round the hole on the outside where a plug's moulded
-# grip has to reach in, or None. Measured from every face, solid or not.
+# grip has to reach in, or None. Measured from every face, solid or not; z
+# from the board's bottom (its top is at 1.7, with the pads).
 PI_PORTS = [
-    ("USB-C", "s", (6.73, 15.67), (1.80, 5.76), 1.20, "rect", (12.5, 7.0)),
-    ("HDMI 0", "s", (22.75, 29.25), (2.18, 5.44), 1.20, "relief", None),
-    ("HDMI 1", "s", (36.25, 42.75), (2.18, 5.44), 1.20, "relief", None),
-    ("Audio", "s", (51.0, 57.0), (2.60, 8.60), 2.50, "round", None),
-    ("USB 3", "e", (1.55, 16.45), (1.09, 18.21), 3.36, "rect", None),
-    ("USB 2", "e", (19.50, 34.50), (3.29, 18.94), 2.85, "rect", None),
-    ("Ethernet", "e", (37.80, 53.70), (0.70, 16.25), 3.25, "rect", None),
+    ("USB-C", "s", (6.73, 15.67), (0.90, 4.86), 1.20, "rect", (12.5, 7.0)),
+    ("HDMI 0", "s", (22.75, 29.25), (1.28, 4.54), 1.20, "relief", None),
+    ("HDMI 1", "s", (36.25, 42.75), (1.28, 4.54), 1.20, "relief", None),
+    ("Audio", "s", (51.0, 57.0), (1.70, 7.70), 2.50, "round", None),
+    ("USB 3", "e", (1.55, 16.45), (0.19, 17.31), 3.36, "rect", None),
+    ("USB 2", "e", (19.50, 34.50), (2.39, 18.04), 2.85, "rect", None),
+    ("Ethernet", "e", (37.80, 53.70), (-0.20, 15.35), 3.25, "rect", None),
 ]
 OVERHANG_S, OVERHANG_E = 2.50, 3.36          # furthest past each edge: the audio jack, USB 3's flange
 FACE_INSET = 0.3                             # connector faces this far inside the outside surface
@@ -159,19 +161,27 @@ HIGH_VENTS_Z = (POST_TOP - 0.7, SCREEN_Z - 0.6)  # a row just under the screen's
 # floor, a little past vertical, so the box's weight holds it there. A single
 # leg can't do this: at the shallow angles it would lie nearly flat and fold
 # under a tap.
-FEET_H, PAD_T, FOOT_R = 8.0, 1.0, 6.0        # stick-on rubber pads under the feet and spines
+FEET_H, RUBBER_T, FOOT_R = 8.0, 0.0, 6.0     # RUBBER_T: stick-on pads under the feet and spines, if you add them
 FRONT_FEET = [(18.0, FOOT_R + 2), (OUT_W - 18.0, FOOT_R + 2)]   # clear of the screen's screw bores
 LEG_T, ARM_W, ARM_GAP, LUG_W, FOOT_W = 6.0, 4.5, 0.5, 3.0, 8.0
-AXIS_Y, AXIS_Z = OUT_D - 14.0, -(LEG_T / 2 + 0.6)   # the hinge: an M3 x 30 and nut each side
+AXIS_Y, AXIS_Z = OUT_D - 14.0, -(LEG_T / 2 + 0.6)   # the hinge: a filament pin each side
 TOOTH_R = 5.5
 SPINE_Y = AXIS_Y + TOOTH_R + 1.0             # the rails' spines start behind the teeth
 OVER = 5.0                                   # degrees past vertical
 LEGS = (45, 30, 15)                          # outermost (longest) first
 SET_W = 2 * LUG_W + ARM_GAP + len(LEGS) * (ARM_W + ARM_GAP)
 SETS_X = (3.0, 112.5)                        # left set starts, right set ends: clear of the Pi's and screen's screws
-BOSS_H = 2.0                                 # floor bosses for the rails' M3 x 3 heat-set inserts
+BOSS_H = 2.0                                 # floor bosses the rails' M2.5 x 8 screws thread into
 RAIL_SCREWS = [(x, OUT_D - WALL - 2.4) for x0 in (SETS_X[0], SETS_X[1] - SET_W) for x in (x0 + 5.5, x0 + SET_W - 5.5)]
 TILT = float(os.environ.get("TILT", 30))     # shown on this leg (0: flat, all folded)
+
+# The whole build needs only M2.5 screws (and the filament it's printed in):
+# the hinge pin is a length of 1.75 mm filament, its ends melted over so it
+# stays; the rails' M2.5 screws thread straight into the plastic. KICKSTAND=0
+# swaps the legs for a simple printed stand at ANGLE degrees.
+KICKSTAND = os.environ.get("KICKSTAND", "1") == "1"
+PIN_D_LUG, PIN_D_ARM = 1.8, 2.05             # snug in the rails' lugs, free in the legs
+ANGLE = float(os.environ.get("ANGLE", 30))
 
 # --- Labels --------------------------------------------------------------------
 # Debossed into the outside faces. On their own they read in raking light;
@@ -547,10 +557,10 @@ def base_model(lettered=True):
         base += Pos(x, y, 0) * Cylinder(POST_R, POST_TOP, align=CTR_XY)
         base -= Pos(x, y, -1) * Cylinder(BORE_R, POST_TOP - SHELF + 1, align=CTR_XY)
         base -= Pos(x, y, -1) * Cylinder(1.4, POST_TOP + 2, align=CTR_XY)
-    for x, y in RAIL_SCREWS:                        # bosses for the rails' inserts, pressed in from below, short of the back plate
+    for x, y in RAIL_SCREWS if KICKSTAND else []:  # bosses for the rails' inserts, pressed in from below, short of the back plate
         base += (Pos(x, y, FLOOR) * Cylinder(3.5, BOSS_H, align=CTR_XY)) & (Pos(0, 0, 0) * Box(OUT_W, OUT_D - WALL - SLIDE, TOP_Z, align=MIN))
-        base -= Pos(x, y, -1) * Cylinder(2.0, FLOOR + BOSS_H + 1 - 0.6, align=CTR_XY)
-    for x, y in FRONT_FEET:                         # shallow recesses to locate the front feet
+        base -= Pos(x, y, -1) * Cylinder(1.1, FLOOR + BOSS_H + 2, align=CTR_XY)   # 2.2 mm: M2.5 cuts its own thread
+    for x, y in FRONT_FEET if KICKSTAND else []:    # shallow recesses to locate the front feet
         base -= Pos(x, y, -1) * Cylinder(FOOT_R + 0.2, 1.6, align=CTR_XY)
     for letters in base_labels() if lettered else []:
         base -= letters
@@ -562,20 +572,20 @@ def rail_model(side):
     spine behind the legs' teeth that is also a back foot. Prints spine-face
     down."""
     x0 = SETS_X[0] if side == 0 else SETS_X[1] - SET_W
-    bottom = -(FEET_H - PAD_T)
+    bottom = -(FEET_H - RUBBER_T)
     rail = Pos(x0, SPINE_Y, bottom) * Box(SET_W, OUT_D - 0.5 - SPINE_Y, -bottom, align=MIN)
     for l0, l1 in lug_x()[2 * side:2 * side + 2]:
         rail += Pos(l0, AXIS_Y - 4.5, AXIS_Z - 3) * Box(l1 - l0, SPINE_Y - AXIS_Y + 4.5 + 0.01, 3 - AXIS_Z, align=MIN)
-    rail -= Pos(0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(1.6, 3 * OUT_W)
-    for x, y in RAIL_SCREWS[2 * side:2 * side + 2]:  # M3 x 8 up into the floor's inserts, heads recessed
-        rail -= Pos(x, y, bottom - 1) * Cylinder(1.7, -bottom + 2, align=CTR_XY)
-        rail -= Pos(x, y, bottom - 1) * Cylinder(3.0, 3.5, align=CTR_XY)
+    rail -= Pos(0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(PIN_D_LUG / 2, 3 * OUT_W)
+    for x, y in RAIL_SCREWS[2 * side:2 * side + 2]:  # M2.5 x 8 up into the floor's bosses, heads recessed
+        rail -= Pos(x, y, bottom - 1) * Cylinder(1.4, -bottom + 2, align=CTR_XY)
+        rail -= Pos(x, y, bottom - 1) * Cylinder(2.6, 1 + (-bottom - 4.0), align=CTR_XY)   # leaves the screw 8 mm to the boss's top
     return tag(rail, f"Hinge rail, {'left' if side == 0 else 'right'}", "#8a6fb3")
 
 
 def foot_model(x, y):
     """A front foot: glued into its recess, a rubber pad under it."""
-    return tag(Pos(x, y, -(FEET_H - PAD_T)) * Cylinder(FOOT_R, FEET_H - PAD_T + 0.5, align=CTR_XY), "Front foot", "#8a6fb3")
+    return tag(Pos(x, y, -(FEET_H - RUBBER_T)) * Cylinder(FOOT_R, FEET_H - RUBBER_T + 0.5, align=CTR_XY), "Front foot", "#8a6fb3")
 
 
 def tooth(angle, a0):
@@ -602,7 +612,7 @@ def leg_model(i, angle, open_):
         leg += Pos(a0, y0, z0) * Box(ARM_W, length, LEG_T, align=MIN)
         leg += Pos(a0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(LEG_T / 2, ARM_W, align=(Align.CENTER, Align.CENTER, Align.MIN))
         leg += tooth(angle, a0)
-    leg -= Pos(0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(1.6, 3 * OUT_W)
+    leg -= Pos(0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(PIN_D_ARM / 2, 3 * OUT_W)
     leg -= leg_label(i, angle)
     if open_:
         leg = about_axis(opening(angle)) * leg
@@ -623,7 +633,24 @@ def solids_of(shape):
     return list(shape.solids()) if hasattr(shape, "solids") else [shape]
 
 
-PRINTED = ("base", "plates", "rails", "feet", "legs")
+def stand_model():
+    """The prototype's stand: a wedge under each side edge of the box with a
+    stop at its front, joined by a bar on the desk. The middle stays open, so
+    air reaches the floor vents. Built in the box's frame (its floor at z = 0);
+    prints as it stands, no support."""
+    above_desk = Rot(-ANGLE, 0, 0) * Box(4 * OUT_W, 4 * OUT_D, 200, align=(Align.CENTER, Align.CENTER, Align.MIN))
+    stand = None
+    for x0 in (3.0, OUT_W - 11.0):
+        rib = Pos(x0, -3, -100) * Box(8, OUT_D + 3, 100, align=MIN)          # under the floor
+        rib += Pos(x0, -3, -100) * Box(8, 3, 103, align=MIN)                 # the stop, 3 mm up the front
+        rib &= above_desk
+        stand = rib if stand is None else stand + rib
+    depth = OUT_D * math.cos(math.radians(ANGLE))
+    stand += Rot(-ANGLE, 0, 0) * (Pos(3, 6, 0) * Box(OUT_W - 6, depth - 8, 2.4, align=MIN))
+    return tag(stand, f"Stand, {ANGLE:g}°", "#8a6fb3")
+
+
+PRINTED = ("base", "plates", "stand", "rails", "feet", "legs")
 
 # Parts that go into each other by design: the Pi's header pins into the DAC's socket.
 MATES = [{"Raspberry Pi 4", "DAC socket"}]
@@ -641,10 +668,15 @@ def main():
     OUT.mkdir(exist_ok=True)
     groups = {
         "base": [base_model()],
-        "legs": [leg_model(i, a, a == TILT) for i, a in enumerate(LEGS)],
         "plates": [back_plate(), left_plate()],
-        "rails": [rail_model(0), rail_model(1)],
-        "feet": [foot_model(x, y) for x, y in FRONT_FEET],
+    }
+    if KICKSTAND:
+        groups["legs"] = [leg_model(i, a, a == TILT) for i, a in enumerate(LEGS)]
+        groups["rails"] = [rail_model(0), rail_model(1)]
+        groups["feet"] = [foot_model(x, y) for x, y in FRONT_FEET]
+    else:
+        groups["stand"] = [stand_model()]
+    groups |= {
         "pi": [pi_model(), heatsink_model()],
         "fan": [fan_model()],
         "dac": dac_model(),
@@ -654,11 +686,13 @@ def main():
         "labels": [tag(Compound(base_labels()), "Label fill", "#f4f5f7")] +
                   [tag(Compound([cut for face, cut in plate_labels() if face == f]), "Label fill", "#f4f5f7") for f in ("back", "left")] +
                   [tag(about_axis(opening(a)) * leg_label(i, a) if a == TILT else leg_label(i, a), "Label fill", "#f4f5f7")
-                   for i, a in enumerate(LEGS)],
+                   for i, a in enumerate(LEGS) if KICKSTAND],
     }
-    # Shown resting on the desk at TILT, on its front feet and that leg.
-    pivot_y = FRONT_FEET[0][1] - FOOT_R
-    on_desk = Pos(0, pivot_y, 0) * Rot(TILT, 0, 0) * Pos(0, -pivot_y, FEET_H)
+    if KICKSTAND:                                   # on its front feet and the TILT leg
+        pivot_y = FRONT_FEET[0][1] - FOOT_R
+        on_desk = Pos(0, pivot_y, 0) * Rot(TILT, 0, 0) * Pos(0, -pivot_y, FEET_H)
+    else:                                           # on the stand, its front bottom edge on the desk
+        on_desk = Rot(ANGLE, 0, 0)
     manifest = []
     for name, shapes in groups.items():
         comp = on_desk * Compound(children=shapes, label=name)
@@ -667,9 +701,16 @@ def main():
     # For printing: the base floor-down, the rails spine-face down, the feet
     # and legs flat.
     atomic(OUT / "base.stl", lambda f: export_stl(groups["base"][0], f))
-    for side, rail in zip(("left", "right"), groups["rails"]):
-        atomic(OUT / f"rail-{side}.stl", lambda f: export_stl(Rot(180, 0, 0) * rail, f))
-    atomic(OUT / "foot.stl", lambda f: export_stl(Pos(0, 0, FEET_H - PAD_T) * groups["feet"][0], f))
+    kickstand_files = ["rail-left.stl", "rail-right.stl", "foot.stl"] + [f"leg-{a}{x}.stl" for a in LEGS for x in ("", "-label")]
+    if KICKSTAND:
+        (OUT / "stand.stl").unlink(missing_ok=True)       # stale, from a KICKSTAND=0 build
+        for side, rail in zip(("left", "right"), groups["rails"]):
+            atomic(OUT / f"rail-{side}.stl", lambda f: export_stl(Rot(180, 0, 0) * rail, f))
+        atomic(OUT / "foot.stl", lambda f: export_stl(Pos(0, 0, FEET_H - RUBBER_T) * groups["feet"][0], f))
+    else:
+        atomic(OUT / "stand.stl", lambda f: export_stl(on_desk * groups["stand"][0], f))
+        for name in kickstand_files:                # stale files from a kickstand build
+            (OUT / name).unlink(missing_ok=True)
     # The fills, for a second filament: load with the part they belong to, as
     # a part of the same object, and give them the other filament.
     atomic(OUT / "base-labels.stl", lambda f: export_stl(groups["labels"][0], f))
@@ -678,11 +719,10 @@ def main():
     for (face, plate), fill in zip(zip(("back", "left"), groups["plates"]), groups["labels"][1:3]):
         atomic(OUT / f"plate-{face}.stl", lambda f: export_stl(flat[face] * plate, f))
         atomic(OUT / f"plate-{face}-labels.stl", lambda f: export_stl(flat[face] * fill, f))
-    for i, angle in enumerate(LEGS):
+    for i, angle in enumerate(LEGS) if KICKSTAND else []:
         atomic(OUT / f"leg-{angle}-label.stl", lambda f: export_stl(Pos(0, 0, LEG_T / 2 - AXIS_Z) * leg_label(i, angle), f))
-    for i, angle in enumerate(LEGS):
         atomic(OUT / f"leg-{angle}.stl", lambda f: export_stl(Pos(0, 0, LEG_T / 2 - AXIS_Z) * leg_model(i, angle, False), f))
-    atomic(OUT / "enclosure.step", lambda f: export_step(Compound(children=[s for g in PRINTED for s in groups[g]]), f))
+    atomic(OUT / "enclosure.step", lambda f: export_step(Compound(children=[s for g in PRINTED if g in groups for s in groups[g]]), f))
 
     # Collisions: every pair of parts from different groups (a group's own
     # pieces touch by design), by volume of overlap.
@@ -714,8 +754,8 @@ def main():
             overlaps.append(tag(Compound(solids), f"{a.label} × {b.label}", "#ff2d2d"))
     # Faces the overlap check can't see (most of the Pi's STEP): any printed
     # part but the base (which the Pi sits on) within 0.1 mm of the Pi or DAC.
-    for g in ("plates", "rails", "legs", "feet"):
-        for a in checked[g]:
+    for g in ("plates", "stand", "rails", "legs", "feet"):
+        for a in checked.get(g, []):
             for b in groups["pi"] + checked["dac"]:
                 if boxes_meet(a.bounding_box(), b.bounding_box()) and a.distance_to(b) < 0.1:
                     hits.append({"a": a.label, "b": b.label, "touching": True})
@@ -724,9 +764,8 @@ def main():
     elif (LIVE / "collisions.glb").exists():
         os.remove(LIVE / "collisions.glb")
     report = {
-        "size_mm": [round(OUT_W, 1), round(OUT_D, 1), round(TOP_Z + FEET_H, 1)],
-        "tilt": TILT,
-        "legs_mm": {a: round(leg_length(a), 1) for a in LEGS},
+        "size_mm": [round(OUT_W, 1), round(OUT_D, 1), round(TOP_Z + (FEET_H if KICKSTAND else 0), 1)],
+        "angle": TILT if KICKSTAND else ANGLE,
         "collisions": hits,
         "seconds": round(time.time() - t0, 1),
     }
