@@ -722,6 +722,17 @@ def main():
     # For printing: the base floor-down, the rails spine-face down, the feet
     # and legs flat.
     atomic(OUT / "base.stl", lambda f: export_stl(groups["base"][0], f))
+    # Quick test prints, no DAC measurements needed. The base's back-left
+    # side, 10 mm high: the Pi's posts, both plates' grooves, the rails'
+    # bosses (screw the rails and a leg on to try the hinge). And a template
+    # the size of the screen's opening, holed where its nuts should land.
+    corner = groups["base"][0] & (Pos(0, 18, 0) * Box(115, OUT_D - 18, 10, align=MIN))
+    atomic(OUT / "test-corner.stl", lambda f: export_stl(corner, f))
+    template = Box(SCREEN_W + 2 * GAP, SCREEN_D + 2 * GAP, 1.2, align=MIN)
+    nuts = [(SCREEN_W / 2 + sx * CORNER_HOLES[0] / 2, SCREEN_D / 2 + sy * CORNER_HOLES[1] / 2) for sx in (-1, 1) for sy in (-1, 1)]
+    for hx, hy in nuts + SCREEN_PI_HOLES:
+        template -= Pos(GAP + hx, GAP + hy, -1) * Cylinder(2.5 + 0.4, 4, align=CTR_XY)
+    atomic(OUT / "test-screen.stl", lambda f: export_stl(template, f))
     kickstand_files = ["rail-left.stl", "rail-right.stl", "foot.stl"] + [f"leg-{a}{x}.stl" for a in LEGS for x in ("", "-label")]
     if KICKSTAND:
         (OUT / "stand.stl").unlink(missing_ok=True)       # stale, from a KICKSTAND=0 build
