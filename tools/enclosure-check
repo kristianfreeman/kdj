@@ -1,0 +1,11 @@
+#!/bin/bash
+# Builds the enclosure model and checks it: collisions between parts, and the
+# design rules in hardware/enclosure/cad/checks.py (thin plastic, untested hole
+# sizes, hardware not on hand, overhangs). Lists each problem and exits 1 if
+# there are any. The viewer (tools/enclosure-live.sh) shows the same list.
+#
+#   tools/enclosure-check
+set -eu
+cd "$(dirname "$0")/../hardware/enclosure"
+docker image inspect kdj-cad >/dev/null 2>&1 || docker build -q -t kdj-cad cad >/dev/null
+docker run --rm -v "$PWD:/w" -w /w kdj-cad python cad/kdj.py --check 2> >(grep -v '^Fontconfig' >&2)

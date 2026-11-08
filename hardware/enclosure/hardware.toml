@@ -1,0 +1,63 @@
+# What's on hand to build the enclosure with, and the hole sizes this printer
+# has been measured to make. cad/checks.py fails a design that needs a part
+# not listed here, or a small round hole that isn't one of these fits.
+
+# --- Fits: measured on the test strip (cad/test_holes.py) ----------------------
+# A fit is the size to draw a hole so the printed hole does its job. Test a new
+# one on a strip before the model uses it.
+
+[fits."M2.5 clearance"]
+d = 3.0
+for = "an M2.5 screw slides through, with room to find the thread above"
+tested = "2026-11-08, test-holes, brown PLA, 0.20 mm layers, 3 walls: 2.8 the smallest that passed both ways"
+
+# --- On hand ------------------------------------------------------------------
+# The M2.5 kit. Standoffs: F-F is a hole at both ends; M-F has a 6 mm stud on
+# one end ("10+6": a 10 mm body and its stud). Lengths in mm.
+
+[[have]]
+part = "screw M2.5x6"
+count = 80
+
+[[have]]
+part = "nut M2.5"
+count = 80
+
+[[have]]
+part = "standoff M2.5 F-F 6"
+count = 15
+
+[[have]]
+part = "standoff M2.5 F-F 10"
+count = 15
+
+[[have]]
+part = "standoff M2.5 F-F 15"
+count = 15
+
+[[have]]
+part = "standoff M2.5 F-F 20"
+count = 15
+
+[[have]]
+part = "standoff M2.5 M-F 6+6"
+count = 15
+
+[[have]]
+part = "standoff M2.5 M-F 10+6"
+count = 15
+
+[[have]]
+part = "standoff M2.5 M-F 15+6"
+count = 15
+
+[[have]]
+part = "standoff M2.5 M-F 20+6"
+count = 15
+
+# The DAC came with its own standoffs and screws to hold it on the Pi; what
+# they are isn't measured yet, so the model doesn't count on them.
+
+[[have]]
+part = "filament 1.75 mm"
+count = 1000

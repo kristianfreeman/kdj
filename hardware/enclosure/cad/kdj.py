@@ -8,8 +8,10 @@ Pi's DISPLAY connector to the screen's.
 
 Run in the kdj-cad container (tools/enclosure-live.sh does, on every save):
 writes live/*.glb (coloured, for viewer.html), live/parts.json, live/report.json
-(sizes, and every pair of parts that collide, with the overlap exported as
-live/collisions.glb), and out/*.stl / out/*.step for printing.
+(sizes, every pair of parts that collide, with the overlap exported as
+live/collisions.glb, and every break of the design rules in checks.py), and
+out/*.stl / out/*.step for printing. With --check, exits 1 if there are any
+(tools/enclosure-check).
 
 Coordinates: mm, Z up, the box's front-left-bottom corner at the origin; the
 screen faces up, flush with the top of the walls; the back wall is at max Y.
@@ -20,6 +22,7 @@ builds the folding-leg version instead, shown on its TILT=15|30|45 leg.
 import json
 import math
 import os
+import sys
 import time
 import uuid
 from itertools import combinations
@@ -32,6 +35,7 @@ from build123d import (
     Color,
     Compound,
     Cylinder,
+    Location,
     Plane,
     Pos,
     RectangleRounded,
@@ -48,6 +52,8 @@ from build123d import (
     import_step,
     Text,
 )
+
+import checks
 
 HERE = Path(__file__).resolve().parent.parent
 LIVE = HERE / "live"
@@ -622,7 +628,7 @@ def tooth(angle, a0):
     return about_axis(-a) * (disc & behind & flat_when_folded)
 
 
-def leg_model(i, angle, open_):
+def leg_model(i, angle, open_, lettered=True):
     """A U: two arms from the hinge, joined at the foot, each with a round hub
     and a tooth. Folded unless open_. Prints flat."""
     length = leg_length(angle)
@@ -634,7 +640,8 @@ def leg_model(i, angle, open_):
         leg += Pos(a0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(LEG_T / 2, ARM_W, align=(Align.CENTER, Align.CENTER, Align.MIN))
         leg += tooth(angle, a0)
     leg -= Pos(0, AXIS_Y, AXIS_Z) * Rot(0, 90, 0) * Cylinder(PIN_D_ARM / 2, 3 * OUT_W)
-    leg -= leg_label(i, angle)
+    if lettered:
+        leg -= leg_label(i, angle)
     if open_:
         leg = about_axis(opening(angle)) * leg
     return tag(leg, f"Leg {angle}°", ["#3b6fb6", "#d08a2e", "#5a9a4a"][i])
@@ -672,6 +679,25 @@ def stand_model():
 
 
 PRINTED = ("base", "plates", "stand", "rails", "feet", "legs")
+
+# Everything bought that goes in, checked against hardware.toml (checks.py):
+# a screw passes `through` mm before it threads, then needs enough thread in
+# what it's `into`, and no more than the `depth` there.
+USES = [
+    {"part": "screw M2.5x12", "count": 4, "where": "Pi posts, up into the DAC's standoffs",
+     "through": STANDOFF_H + PI_T, "into": "metal", "depth": 5.0},
+    {"part": "screw M2.5x6", "count": 4, "where": "screen, up through the posts' shelves into its nuts",
+     "through": SHELF, "into": "metal", "depth": NUT_H},
+] + ([
+    {"part": "screw M2.5x8", "count": 4, "where": "hinge rails, up into the floor's bosses",
+     "through": 4.0, "into": "plastic", "depth": FLOOR + BOSS_H},
+    {"part": "filament 1.75 mm", "count": 2, "where": "hinge pins"},
+] if KICKSTAND else [])
+
+# Findings the design means, and why: (check, part, mm or None, why).
+ALLOW = [
+    ("thin", "plate", TONGUE_T, "the plates' end tongues: thin to slide down the base's grooves"),
+]
 
 # Parts that go into each other by design: the Pi's header pins into the DAC's socket.
 MATES = [{"Raspberry Pi 4", "DAC socket"}]
@@ -716,7 +742,7 @@ def main():
         on_desk = Rot(ANGLE, 0, 0)
     manifest = []
     for name, shapes in groups.items():
-        comp = on_desk * Compound(children=shapes, label=name)
+        comp = Compound(children=shapes, label=name)   # untilted: export_gltf misplaces a rotated compound
         atomic(LIVE / f"{name}.glb", lambda f: export_gltf(comp, f, binary=True, linear_deflection=0.1, angular_deflection=0.4))
         manifest.append({"name": name, "file": f"{name}.glb", "printed": name in PRINTED})
     # For printing: the base floor-down, the rails spine-face down, the feet
@@ -791,21 +817,40 @@ def main():
             for b in groups["pi"] + checked["dac"]:
                 if boxes_meet(a.bounding_box(), b.bounding_box()) and a.distance_to(b) < 0.1:
                     hits.append({"a": a.label, "b": b.label, "touching": True})
+    # Design rules (checks.py), on each printed part as it sits on the bed.
+    # Unlettered: the letters are shallow cuts in thick walls.
+    to_print = [(checked["base"][0], Location()),
+                (checked["plates"][0], flat["back"]), (checked["plates"][1], flat["left"])]
+    if KICKSTAND:
+        to_print += [(rail, Rot(180, 0, 0)) for rail in groups["rails"]] + [(groups["feet"][0], Location())]
+        to_print += [(leg_model(i, a, False, lettered=False), Location()) for i, a in enumerate(LEGS)]
+    else:
+        to_print += [(groups["stand"][0], on_desk)]
+    problems = checks.run([(shape.label, shape, loc) for shape, loc in to_print], USES, ALLOW)
     if overlaps:
-        atomic(LIVE / "collisions.glb", lambda f: export_gltf(on_desk * Compound(children=overlaps), f, binary=True))
+        atomic(LIVE / "collisions.glb", lambda f: export_gltf(Compound(children=overlaps), f, binary=True))
     elif (LIVE / "collisions.glb").exists():
         os.remove(LIVE / "collisions.glb")
     report = {
         "size_mm": [round(OUT_W, 1), round(OUT_D, 1), round(TOP_Z + (FEET_H if KICKSTAND else 0), 1)],
         "angle": TILT if KICKSTAND else ANGLE,
+        # The parts are exported in the box's frame; the viewer tilts them onto the desk with this (row-major 4x4).
+        "on_desk": [on_desk.wrapped.Transformation().Value(r, c) for r in (1, 2, 3) for c in (1, 2, 3, 4)] + [0, 0, 0, 1],
         "collisions": hits,
+        "problems": problems,
         "seconds": round(time.time() - t0, 1),
     }
     atomic(LIVE / "parts.json", lambda f: Path(f).write_text(json.dumps(manifest)))
     atomic(LIVE / "report.json", lambda f: Path(f).write_text(json.dumps(report, indent=1)))
     atomic(LIVE / "stamp.txt", lambda f: Path(f).write_text(str(time.time_ns())))
-    print(json.dumps(report))
+    for c in hits:
+        print(f"✕ collision {c['a']} × {c['b']}: " + ("couldn't check" if "error" in c else "touching" if c.get("touching") else f"{c['mm3']} mm³"))
+    for f in problems:
+        print(checks.describe(f))
+    print(f"{len(hits)} collisions, {len(problems)} problems, {report['seconds']} s")
+    return not hits and not problems
 
 
 if __name__ == "__main__":
-    main()
+    ok = main()
+    sys.exit(0 if ok or "--check" not in sys.argv else 1)

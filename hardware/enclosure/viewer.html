@@ -19,6 +19,10 @@
   .ok::before { content: "✓ "; }
   button { background: #f3f4f6; color: #111418; border: 1px solid #aeb5bf; border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
   button:hover { background: #e2e5e9; }
+  #problems { max-height: 42vh; overflow: auto; display: grid; gap: 2px; max-width: 360px; }
+  #problems .item { cursor: pointer; padding: 2px 4px; border-radius: 4px; font-size: 13px; line-height: 1.35; }
+  #problems .item:hover { background: #e2e5e9; }
+  #problems .n { display: inline-block; min-width: 22px; height: 18px; border-radius: 9px; background: #111418; color: #fff; text-align: center; font: 700 11px/18px system-ui; margin-right: 5px; }
 </style>
 </head>
 <body>
@@ -32,6 +36,8 @@
   <label><input id="xray" type="checkbox"> X-ray the box</label>
   <div style="display:flex; gap:6px"><button id="front">Front</button><button id="back">Back</button><button id="side">Side</button><button id="top">Top</button><button id="iso">3/4</button></div>
   <div id="hits"></div>
+  <label><input id="showProblems" type="checkbox" checked> Show problems</label>
+  <div id="problems"></div>
   <span id="stamp"></span>
 </div>
 <script type="importmap">
@@ -72,6 +78,60 @@ scene.add(grid);
 const gltf = new GLTFLoader();
 const groups = {};   // name -> { obj, printed }
 let collisions = null;
+// Everything is exported in the box's own frame; this tilts it onto the desk
+// (report.on_desk), so markers placed in that frame land on the parts.
+const world = new THREE.Group();
+world.matrixAutoUpdate = false;
+scene.add(world);
+const markers = new THREE.Group();
+markers.renderOrder = 20;
+world.add(markers);
+
+// A numbered tag: black disc, white ring and number, drawn over everything,
+// so it reads by shape and contrast, not colour.
+function tagSprite(n) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  g.beginPath(); g.arc(32, 32, 28, 0, Math.PI * 2);
+  g.fillStyle = '#111418'; g.fill();
+  g.lineWidth = 5; g.strokeStyle = '#ffffff'; g.stroke();
+  g.fillStyle = '#ffffff'; g.font = '700 26px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(String(n), 32, 34);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true, sizeAttenuation: false }));
+  s.scale.setScalar(0.03);   // of the view's height, however close
+  s.renderOrder = 20;
+  return s;
+}
+
+function listProblems(problems) {
+  for (const m of [...markers.children]) { m.material.map.dispose(); m.material.dispose(); markers.remove(m); }
+  const box = document.getElementById('problems');
+  box.innerHTML = '';
+  if (!problems) return;
+  const head = document.createElement('span');
+  head.className = problems.length ? 'hit' : 'ok';
+  head.textContent = problems.length ? `${problems.length} design problems` : 'Design rules pass';
+  box.appendChild(head);
+  problems.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<span class="n">${i + 1}</span>`;
+    row.append(`${p.part.replace(' (printed)', '')}: ${p.what}`);
+    box.appendChild(row);
+    if (!p.at) return;
+    const s = tagSprite(i + 1);
+    s.position.set(...p.at);
+    markers.add(s);
+    row.addEventListener('click', () => {
+      const at = s.getWorldPosition(new THREE.Vector3());
+      const back = camera.position.clone().sub(controls.target).normalize().multiplyScalar(70);
+      controls.target.copy(at);
+      camera.position.copy(at).add(back);
+      controls.update();
+    });
+  });
+}
 let center = new THREE.Vector3(), radius = 120, first = true;
 
 // The Pi's STEP arrives as ~11,000 meshes, one draw call each: merge every
@@ -118,26 +178,30 @@ function prep(obj, printed) {
 
 async function load(stamp) {
   const manifest = await (await fetch(`live/parts.json?${stamp}`, { cache: 'no-store' })).json();
+  const report = await (await fetch(`live/report.json?${stamp}`, { cache: 'no-store' })).json();
+  if (report.on_desk) { world.matrix.set(...report.on_desk); world.matrixWorldNeedsUpdate = true; }
+  world.updateMatrixWorld(true);
   const box = new THREE.Box3();
   for (const part of manifest) {
     const g = await gltf.loadAsync(`live/${part.file}?${stamp}`);
-    if (groups[part.name]) scene.remove(groups[part.name].obj);
+    if (groups[part.name]) world.remove(groups[part.name].obj);
     const obj = prep(flatten(g.scene), part.printed);
     groups[part.name] = { obj, printed: part.printed };
-    scene.add(obj);
+    world.add(obj);
+    obj.updateMatrixWorld(true);
     box.expandByObject(obj);
   }
-  if (collisions) { scene.remove(collisions); collisions = null; }
+  if (collisions) { world.remove(collisions); collisions = null; }
   try {
     const c = await gltf.loadAsync(`live/collisions.glb?${stamp}`);
     collisions = prep(flatten(c.scene), false);
     collisions.traverse((o) => { if (o.isMesh) o.material = new THREE.MeshBasicMaterial({ color: 0xff2d2d, depthTest: false, transparent: true, opacity: 0.85 }); });
     collisions.renderOrder = 10;
-    scene.add(collisions);
+    world.add(collisions);
   } catch (e) { /* none */ }
-  const report = await (await fetch(`live/report.json?${stamp}`, { cache: 'no-store' })).json();
   const [w, d, h] = report.size_mm;
   document.getElementById('size').textContent = `${w} × ${d} × ${h} mm · built in ${report.seconds} s`;
+  listProblems(report.problems);
   const list = document.getElementById('hits');
   list.innerHTML = '';
   if (!report.collisions.length) list.innerHTML = '<span class="ok">No collisions</span>';
@@ -166,6 +230,7 @@ function apply() {
     o.visible = name === 'legs' ? showLegs.checked : (g.printed || name === 'labels') ? showBase.checked : showGhosts.checked;
     if (g.printed) o.traverse((m) => { if (m.isMesh) m.material = xray ? m.userData.xray : m.userData.solid; });
   }
+  markers.visible = document.getElementById('showProblems').checked;
 }
 
 function view(which) {
@@ -177,7 +242,7 @@ function view(which) {
   controls.update();
 }
 
-for (const id of ['explode', 'showLegs', 'showBase', 'showGhosts', 'xray']) document.getElementById(id).addEventListener('input', apply);
+for (const id of ['explode', 'showLegs', 'showBase', 'showGhosts', 'xray', 'showProblems']) document.getElementById(id).addEventListener('input', apply);
 for (const id of ['front', 'back', 'side', 'top', 'iso']) document.getElementById(id).addEventListener('click', () => view(id));
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
