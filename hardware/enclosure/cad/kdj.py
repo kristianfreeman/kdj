@@ -140,6 +140,7 @@ BACK_PLATE_X = (14.0, OUT_W - 14.0)
 LEFT_PLATE_Y = (20.0, OUT_D - WALL - 0.5)
 TONGUE_T, TONGUE_L, SLIDE = 1.2, 1.6, 0.15   # the plates' end tongues, and clearance round them
 PLATE_LIFT = 0.2                             # off the floor: the connectors set their height
+STIFF_D, STIFF_H = 3.0, 1.6                  # a lip along each plate's inside bottom edge: an L, not a flat strip
 
 # --- Air -----------------------------------------------------------------------
 # In through the floor (slots placed between the folded legs' crossbars),
@@ -457,12 +458,31 @@ def tongues(groove=False):
             Pos(xl, ly1 - over, z0) * Box(t, reach + over, h, align=MIN)]
 
 
+def stiffener(face):
+    """The lip along a plate's inside bottom edge, notched round the rails'
+    bosses and the Pi's posts."""
+    z = FLOOR + PLATE_LIFT
+    if face == "back":
+        x0, x1 = BACK_PLATE_X
+        lip = Pos(x0 + SLIDE, OUT_D - WALL - STIFF_D, z) * Box(x1 - x0 - 2 * SLIDE, STIFF_D + 0.01, STIFF_H, align=MIN)
+    else:
+        y0, y1 = LEFT_PLATE_Y
+        lip = Pos(WALL - 0.01, y0 + SLIDE, z) * Box(STIFF_D + 0.01, y1 - y0 - 2 * SLIDE, STIFF_H, align=MIN)
+    for x, y in RAIL_SCREWS if KICKSTAND else []:
+        lip -= Pos(x, y, 0) * Cylinder(3.8, TOP_Z, align=CTR_XY)
+    for hx, hy in PI_HOLES:
+        x, y, _ = placed(hx, hy)
+        lip -= Pos(x, y, 0) * Cylinder(3.3, TOP_Z, align=CTR_XY)
+    return lip
+
+
 def back_plate(lettered=True):
     """Prints outside face down."""
     x0, x1 = BACK_PLATE_X
     plate = Pos(x0 + SLIDE, OUT_D - WALL, FLOOR + PLATE_LIFT) * Box(x1 - x0 - 2 * SLIDE, WALL, TOP_Z - FLOOR - PLATE_LIFT, align=MIN)
     for t in tongues()[:2]:
         plate += t
+    plate += stiffener("back")
     for face, cut in plate_holes() + (plate_labels() if lettered else []):
         if face == "back":
             plate -= cut
@@ -477,6 +497,7 @@ def left_plate(lettered=True):
     plate = Pos(0, y0 + SLIDE, FLOOR + PLATE_LIFT) * Box(WALL, y1 - y0 - 2 * SLIDE, TOP_Z - FLOOR - PLATE_LIFT, align=MIN)
     for t in tongues()[2:]:
         plate += t
+    plate += stiffener("left")
     x, y = min(SCREEN_CORNERS, key=lambda p: p[0] - p[1])
     shelf_z = BOARD_Z + max(p[3][1] for p in PI_PORTS if p[1] == "e") + 0.6
     plate += Pos(WALL - 0.01, y - POST_R, shelf_z) * Box(x + POST_R - WALL + 0.01, y1 - SLIDE - (y - POST_R), POST_TOP - shelf_z, align=MIN)
