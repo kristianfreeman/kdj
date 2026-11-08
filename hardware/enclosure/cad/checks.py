@@ -33,7 +33,7 @@ MIN_WALL = 1.6          # four perimeters of a 0.4 mm nozzle
 FASTENER_HOLE = 5.0     # round holes smaller than this are for screws, pins, standoffs
 OVERHANG = 45.0         # degrees from vertical
 BRIDGE = 10.0           # mm, the widest flat ceiling printed with nothing under it
-MIN_THREAD = {"metal": 2.5, "plastic": 5.0}   # mm of thread engaged, M2.5: 1 diameter in metal, 2 in plastic
+MIN_THREAD = {"metal": 2.5, "plastic": 5.0, "nut": 2.0}   # mm engaged, M2.5: 1 diameter in metal, 2 in plastic, a whole nut
 
 HARDWARE = Path(__file__).resolve().parent.parent / "hardware.toml"
 
@@ -137,9 +137,11 @@ def screw_length(name):
 
 
 def hardware(uses, have):
-    """uses: dicts of part (a name in hardware.toml), count, where, and for a
-    screw: through (mm it passes before it threads), into ("metal" or
-    "plastic"), depth (mm of thread there before it bottoms out)."""
+    """uses: dicts of part (a name in hardware.toml), count, where, and for
+    anything threaded: through (mm it passes before it threads), into
+    ("metal", "plastic" or "nut"), depth (mm of thread there before it bottoms
+    out; none for a nut, which it passes through), and length (mm of thread,
+    if the name doesn't say: a standoff's stud)."""
     found = []
     stock = {h["part"]: h for h in have}
     totals = defaultdict(int)
@@ -148,14 +150,14 @@ def hardware(uses, have):
         if u["part"] not in stock:
             found.append(finding("hardware", u["where"], f"needs {u['count']}× {u['part']}, which isn't on hand"))
             continue
-        length = screw_length(u["part"]) if u["part"].startswith("screw") else None
+        length = u.get("length") or (screw_length(u["part"]) if u["part"].startswith("screw") else None)
         if length is None or "through" not in u:
             continue
         thread = length - u["through"]
         need = MIN_THREAD[u["into"]]
         if thread < need:
             found.append(finding("hardware", u["where"], f"{u['part']} threads {thread:.1f} mm into {u['into']}, under {need} mm", thread))
-        elif thread > u["depth"]:
+        elif "depth" in u and thread > u["depth"]:
             found.append(finding("hardware", u["where"], f"{u['part']} reaches {thread:.1f} mm in, {thread - u['depth']:.1f} mm past the {u['depth']:.1f} mm there", thread))
     for part, n in totals.items():
         if part in stock and n > stock[part]["count"]:

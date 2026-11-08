@@ -37,8 +37,10 @@ from build123d import (
     Cylinder,
     Location,
     Plane,
+    Polygon,
     Pos,
     RectangleRounded,
+    RegularPolygon,
     Rot,
     Shape,
     Shell,
@@ -62,6 +64,11 @@ PARTS = HERE / "parts"
 MIN = (Align.MIN, Align.MIN, Align.MIN)
 CTR_XY = (Align.CENTER, Align.CENTER, Align.MIN)
 
+# Hole sizes this printer was measured to make (hardware.toml): every small
+# round hole uses one of these, and checks.py fails any that doesn't.
+FIT = {name: f["d"] for name, f in checks.load_hardware()[1].items()}
+M25 = FIT["M2.5 clearance"]
+
 # --- The screen: 5" DSI display, from its manual --------------------------
 SCREEN_W, SCREEN_D = 121.11, 77.93          # module (PCB) outline
 LENS_W, LENS_D = 120.5, 75.65               # cover glass
@@ -82,7 +89,9 @@ FPC_LEN = 46.01                             # it stands on end, centred on this 
 PI_W, PI_D, PI_T = 85.0, 56.0, 1.6
 PI_HOLES = [(3.5, 3.5), (61.5, 3.5), (3.5, 52.5), (61.5, 52.5)]
 DSI_ON_PI = (2.5, 28.0)                     # DISPLAY connector, Pi coordinates (approx.)
-STANDOFF_H = 4.0
+# The Pi stands on four metal M-F 6+6 standoffs, each stud down through the
+# floor into a nut underneath: nothing printed takes the load.
+STANDOFF_H, STANDOFF_AF, NUT_T = 6.0, 5.0, 2.0   # body; across flats (standoff and nut); nut thickness
 SOC_ON_PI, SOC_H = (29.23, 32.63), 2.3         # the processor, from the STEP: 14.6 mm square
 HEATSINK = (14.0, 14.0, 6.0)                 # a stick-on aluminium one; clears the HAT by ~3 mm
 
@@ -133,7 +142,7 @@ SCREEN_Z = BASE_H                            # the back of the screen's board
 # under it, so that corner rests on a ledge instead.
 SCREEN_CORNERS = [(SCREEN_X + SCREEN_W / 2 + sx * CORNER_HOLES[0] / 2, SCREEN_Y + SCREEN_D / 2 + sy * CORNER_HOLES[1] / 2) for sx in (-1, 1) for sy in (-1, 1)]
 POST_TOP = SCREEN_Z - NUT_H
-POST_R, BORE_R, SHELF = 4.5, 3.0, 3.0        # bore from below for the screwdriver; M2.5 x 6 through the shelf
+POST_R, BORE_R, SHELF = 5.0, 2.75, 3.0       # bore from below for the screwdriver; M2.5 x 6 through the shelf
 TOP_Z = SCREEN_Z + SCREEN_T                  # no lid: the walls rise to the glass, which sits flush
 
 # --- I/O plates ----------------------------------------------------------------
@@ -144,7 +153,11 @@ TOP_Z = SCREEN_Z + SCREEN_T                  # no lid: the walls rise to the gla
 # close and the connectors sit flush.
 BACK_PLATE_X = (14.0, OUT_W - 14.0)
 LEFT_PLATE_Y = (20.0, OUT_D - WALL - 0.5)
-TONGUE_T, TONGUE_L, SLIDE = 1.2, 1.6, 0.15   # the plates' end tongues, and clearance round them
+# Each plate's ends are cut on a slant, matching the slant of the opening's
+# ends: the opening is TAPER narrower at the outside face on each side, so a
+# plate can't come out, and the Pi's board stops it going in. Lowered in from
+# above with the Pi, nothing to slide down, nothing thin.
+TAPER, SLIDE = 1.2, 0.15                     # mm the opening narrows to the outside, each end; clearance at the ends
 PLATE_LIFT = 0.2                             # off the floor: the connectors set their height
 STIFF_D, STIFF_H = 3.0, 1.6                  # a lip along each plate's inside bottom edge: an L, not a flat strip
 
@@ -155,6 +168,7 @@ STIFF_D, STIFF_H = 3.0, 1.6                  # a lip along each plate's inside b
 # right wall, blowing out, level with the gap between the Pi and the DAC; its
 # grille is a vent until then.
 FAN_SIZE, FAN_T, FAN_HOLES = 30.0, 10.0, 24.0  # frame, thickness, M3 hole spacing
+FAN = os.environ.get("FAN", "0") == "1"           # its screw holes, once there's a fan (and M3 screws) to fit
 FAN_AT = (35.0, FLOOR + 1 + 30.0 / 2)          # its centre on the right wall: y, z
 HIGH_VENTS_Z = (POST_TOP - 0.7, SCREEN_Z - 0.6)  # a row just under the screen's board
 
@@ -186,7 +200,7 @@ TILT = float(os.environ.get("TILT", 30))     # shown on this leg (0: flat, all f
 # the hinge pin is a length of 1.75 mm filament, its ends melted over so it
 # stays; the rails' M2.5 screws thread straight into the plastic. KICKSTAND=0
 # swaps the legs for a simple printed stand at ANGLE degrees.
-KICKSTAND = os.environ.get("KICKSTAND", "1") == "1"
+KICKSTAND = os.environ.get("KICKSTAND", "0") == "1"
 PIN_D_LUG, PIN_D_ARM = 1.8, 2.05             # snug in the rails' lugs, free in the legs
 ANGLE = float(os.environ.get("ANGLE", 30))
 
@@ -325,6 +339,22 @@ def heatsink_model():
     return tag(Pos(x, y, z) * Box(*HEATSINK, align=CTR_XY), "Heatsink", "#b0b4ba")
 
 
+def standoffs_model():
+    """The Pi's four M-F 6+6 standoffs, studs down through the floor, and
+    their nuts underneath (bought, not printed)."""
+    out = []
+    for hx, hy in PI_HOLES:
+        x, y, _ = placed(hx, hy)
+        hex_ = RegularPolygon(STANDOFF_AF / 2, 6, major_radius=False)
+        body = Pos(x, y, FLOOR) * extrude(hex_, amount=STANDOFF_H)
+        body -= Pos(x, y, FLOOR + 1) * Cylinder(1.25, STANDOFF_H, align=CTR_XY)
+        body += Pos(x, y, FLOOR - 6.0) * Cylinder(1.25, 6.0, align=CTR_XY)       # the stud
+        out.append(tag(body, "Standoff", "#c9a646"))
+        nut = Pos(x, y, -NUT_T) * extrude(hex_, amount=NUT_T) - Pos(x, y, -NUT_T - 1) * Cylinder(1.25, NUT_T + 2, align=CTR_XY)
+        out.append(tag(nut, "Nut", "#9aa0a8"))
+    return out
+
+
 def dac_model():
     hz = BOARD_Z + PI_T + HAT_GAP
     parts = []
@@ -413,10 +443,10 @@ def plate_holes():
             x = placed(u, 0)[0]
             out.append((face, Pos(x - w / 2, OUT_D - WALL - 0.5, z - h / 2) * Box(w, 0.5 + into + HOLE_GAP, h, align=MIN)))
             continue
-        out.append((face, on_face(Circle(w / 2) if shape == "round" else RectangleRounded(w, h, 0.6), face, at, WALL + 1, proud=0.5)))
-        if pocket:                                  # down to the connector's face
-            depth = FACE_INSET + (OVERHANG_S if edge == "s" else OVERHANG_E) - reach
-            out.append((face, on_face(RectangleRounded(*pocket, 1.5), face, at, depth, proud=0.5)))
+        # A plug whose moulded grip has to reach in (USB-C) gets an opening
+        # that size, straight through: a pocket would leave a thin frame.
+        outline = RectangleRounded(*pocket, 1.5) if pocket else Circle(w / 2) if shape == "round" else RectangleRounded(w, h, 0.6)
+        out.append((face, on_face(outline, face, at, WALL + 1, proud=0.5)))
     hz = BOARD_Z + PI_T + HAT_GAP + HAT_T
     for name, jx, d, cz, _ in HAT_JACKS:
         if name in CUT_JACKS:
@@ -448,20 +478,24 @@ def base_labels():
             label_solid(REVISION, 4.0, "bottom", (OUT_W / 2, FRONT_FEET[0][1] + 3, 0), depth=0.4)]
 
 
-def tongues(groove=False):
-    """The plates' end tongues [back plate's two, left plate's two], or
-    (groove) the slots in the base's corners they slide down, SLIDE bigger."""
-    g = SLIDE if groove else 0.0
-    t, reach = TONGUE_T + 2 * g, TONGUE_L + g       # across the wall, into the corner
-    z0 = FLOOR if groove else FLOOR + PLATE_LIFT
-    h = (TOP_Z + 1 if groove else TOP_Z) - z0
-    (bx0, bx1), (ly0, ly1) = BACK_PLATE_X, LEFT_PLATE_Y
-    yb, xl = OUT_D - WALL / 2 - t / 2, WALL / 2 - t / 2
-    over = SLIDE + 0.5                              # into the plate, or the opening
-    return [Pos(bx0 - reach, yb, z0) * Box(reach + over, t, h, align=MIN),
-            Pos(bx1 - over, yb, z0) * Box(reach + over, t, h, align=MIN),
-            Pos(xl, ly0 - reach, z0) * Box(t, reach + over, h, align=MIN),
-            Pos(xl, ly1 - over, z0) * Box(t, reach + over, h, align=MIN)]
+def slanted(face, clear=0.0, z0=FLOOR, z1=TOP_Z + 1):
+    """The prism a plate fills in its wall: across the opening, its ends
+    slanting TAPER in towards the outside face. clear shrinks it at the ends
+    (the plate); the base's cut is the full size, overshooting both faces."""
+    over = 1.0
+    if face == "back":
+        (a0, a1), inner, outer = BACK_PLATE_X, OUT_D - WALL, OUT_D
+    else:
+        (a0, a1), inner, outer = LEFT_PLATE_Y, WALL, 0.0
+    def at(v):                                      # the ends' positions at depth v through the wall
+        k = (v - inner) / (outer - inner) * TAPER
+        return a0 + clear + k, a1 - clear - k
+    d = 1 if outer > inner else -1
+    v_in, v_out = (inner, outer) if clear else (inner - d * over, outer + d * over)
+    pts = [(at(v_in)[0], v_in), (at(v_in)[1], v_in), (at(v_out)[1], v_out), (at(v_out)[0], v_out)]
+    if face == "left":
+        pts = [(v, u) for u, v in pts]
+    return Pos(0, 0, z0) * extrude(Polygon(*pts, align=None), amount=z1 - z0, dir=(0, 0, 1))
 
 
 def stiffener(face):
@@ -470,10 +504,10 @@ def stiffener(face):
     z = FLOOR + PLATE_LIFT
     if face == "back":
         x0, x1 = BACK_PLATE_X
-        lip = Pos(x0 + SLIDE, OUT_D - WALL - STIFF_D, z) * Box(x1 - x0 - 2 * SLIDE, STIFF_D + 0.01, STIFF_H, align=MIN)
+        lip = Pos(x0 + SLIDE + 0.5, OUT_D - WALL - STIFF_D, z) * Box(x1 - x0 - 2 * SLIDE - 1, STIFF_D + 0.01, STIFF_H, align=MIN)
     else:
         y0, y1 = LEFT_PLATE_Y
-        lip = Pos(WALL - 0.01, y0 + SLIDE, z) * Box(STIFF_D + 0.01, y1 - y0 - 2 * SLIDE, STIFF_H, align=MIN)
+        lip = Pos(WALL - 0.01, y0 + SLIDE + 0.5, z) * Box(STIFF_D + 0.01, y1 - y0 - 2 * SLIDE - 1, STIFF_H, align=MIN)
     for x, y in RAIL_SCREWS if KICKSTAND else []:
         lip -= Pos(x, y, 0) * Cylinder(3.8, TOP_Z, align=CTR_XY)
     for hx, hy in PI_HOLES:
@@ -485,9 +519,7 @@ def stiffener(face):
 def back_plate(lettered=True):
     """Prints outside face down."""
     x0, x1 = BACK_PLATE_X
-    plate = Pos(x0 + SLIDE, OUT_D - WALL, FLOOR + PLATE_LIFT) * Box(x1 - x0 - 2 * SLIDE, WALL, TOP_Z - FLOOR - PLATE_LIFT, align=MIN)
-    for t in tongues()[:2]:
-        plate += t
+    plate = slanted("back", SLIDE, FLOOR + PLATE_LIFT, TOP_Z)
     plate += stiffener("back")
     for face, cut in plate_holes() + (plate_labels() if lettered else []):
         if face == "back":
@@ -500,9 +532,7 @@ def left_plate(lettered=True):
     USB jacks and so has to come in with them. Prints outside face down, the
     shelf standing up."""
     y0, y1 = LEFT_PLATE_Y
-    plate = Pos(0, y0 + SLIDE, FLOOR + PLATE_LIFT) * Box(WALL, y1 - y0 - 2 * SLIDE, TOP_Z - FLOOR - PLATE_LIFT, align=MIN)
-    for t in tongues()[2:]:
-        plate += t
+    plate = slanted("left", SLIDE, FLOOR + PLATE_LIFT, TOP_Z)
     plate += stiffener("left")
     x, y = min(SCREEN_CORNERS, key=lambda p: p[0] - p[1])
     shelf_z = BOARD_Z + max(p[3][1] for p in PI_PORTS if p[1] == "e") + 0.6
@@ -538,11 +568,11 @@ def vents():
     # four M3 holes; then the high row.
     fy, fz = FAN_AT
     r = FAN_SIZE / 2 - 1.5
-    for dy in [-12 + 3.5 * i for i in range(8)]:
+    for dy in [-12.6 + 3.6 * i for i in range(8)]:   # 2 mm slots, 1.6 mm bars
         h = 2 * math.sqrt(max(r * r - (dy + 1) ** 2, 0)) - 1
         if h > 3:
             cuts.append(Pos(OUT_W - WALL - 1, fy + dy, fz - h / 2) * Box(WALL + 2, 2, h, align=MIN))
-    for sy in (-1, 1):
+    for sy in (-1, 1) if FAN else ():
         for sz in (-1, 1):
             cuts.append(Pos(OUT_W - WALL - 1, fy + sy * FAN_HOLES / 2, fz + sz * FAN_HOLES / 2) * Rot(0, 90, 0) * Cylinder(1.7, WALL + 2, align=CTR_XY))
     z0, z1 = HIGH_VENTS_Z
@@ -566,24 +596,20 @@ def base_model(lettered=True):
     nothing inside overhangs past 45 degrees."""
     base = Box(OUT_W, OUT_D, TOP_Z, align=MIN) - Pos(WALL, WALL, FLOOR) * Box(IN_W, IN_D, TOP_Z, align=MIN)
     (x0, x1), (y0, y1) = BACK_PLATE_X, LEFT_PLATE_Y   # openings for the I/O plates, and their grooves
-    base -= Pos(x0, OUT_D - WALL - 0.01, FLOOR) * Box(x1 - x0, WALL + 1, TOP_Z, align=MIN)
-    base -= Pos(-1, y0, FLOOR) * Box(WALL + 1.01, y1 - y0, TOP_Z, align=MIN)
-    for g in tongues(groove=True):
-        base -= g
+    base -= slanted("back")
+    base -= slanted("left")
     for cut in vents():
         base -= cut
-    for hx, hy in PI_HOLES:                         # Pi standoffs: M2.5 up from under the floor, heads recessed
+    for hx, hy in PI_HOLES:                         # the standoffs' studs, down through the flat floor
         x, y, _ = placed(hx, hy)
-        base += Pos(x, y, FLOOR) * Cylinder(3, STANDOFF_H, align=CTR_XY)
-        base -= Pos(x, y, -1) * Cylinder(1.4, FLOOR + STANDOFF_H + 2, align=CTR_XY)
-        base -= Pos(x, y, -1) * Cylinder(2.5, FLOOR + 1, align=CTR_XY)
+        base -= Pos(x, y, -1) * Cylinder(M25 / 2, FLOOR + 2, align=CTR_XY)
     back_left = min(SCREEN_CORNERS, key=lambda p: p[0] - p[1])
     for x, y in SCREEN_CORNERS:
         if (x, y) == back_left:                     # its shelf is on the left plate
             continue
         base += Pos(x, y, 0) * Cylinder(POST_R, POST_TOP, align=CTR_XY)
         base -= Pos(x, y, -1) * Cylinder(BORE_R, POST_TOP - SHELF + 1, align=CTR_XY)
-        base -= Pos(x, y, -1) * Cylinder(1.4, POST_TOP + 2, align=CTR_XY)
+        base -= Pos(x, y, -1) * Cylinder(M25 / 2, POST_TOP + 2, align=CTR_XY)
     for x, y in RAIL_SCREWS if KICKSTAND else []:  # bosses for the rails' inserts, pressed in from below, short of the back plate
         base += (Pos(x, y, FLOOR) * Cylinder(3.5, BOSS_H, align=CTR_XY)) & (Pos(0, 0, 0) * Box(OUT_W, OUT_D - WALL - SLIDE, TOP_Z, align=MIN))
         base -= Pos(x, y, -1) * Cylinder(1.1, FLOOR + BOSS_H + 2, align=CTR_XY)   # 2.2 mm: M2.5 cuts its own thread
@@ -669,8 +695,8 @@ def stand_model():
     above_desk = Rot(-ANGLE, 0, 0) * Box(4 * OUT_W, 4 * OUT_D, 200, align=(Align.CENTER, Align.CENTER, Align.MIN))
     stand = None
     for x0 in (3.0, OUT_W - 11.0):
-        rib = Pos(x0, -3, -100) * Box(8, OUT_D + 3, 100, align=MIN)          # under the floor
-        rib += Pos(x0, -3, -100) * Box(8, 3, 103, align=MIN)                 # the stop, 3 mm up the front
+        rib = Pos(x0, -4, -100) * Box(8, OUT_D + 4, 100, align=MIN)          # under the floor
+        rib += Pos(x0, -4, -100) * Box(8, 4, 105, align=MIN)                 # the stop, 5 mm up the front
         rib &= above_desk
         stand = rib if stand is None else stand + rib
     depth = OUT_D * math.cos(math.radians(ANGLE))
@@ -684,8 +710,13 @@ PRINTED = ("base", "plates", "stand", "rails", "feet", "legs")
 # a screw passes `through` mm before it threads, then needs enough thread in
 # what it's `into`, and no more than the `depth` there.
 USES = [
-    {"part": "screw M2.5x12", "count": 4, "where": "Pi posts, up into the DAC's standoffs",
-     "through": STANDOFF_H + PI_T, "into": "metal", "depth": 5.0},
+    {"part": "standoff M2.5 M-F 6+6", "count": 4, "where": "Pi posts: stud down through the floor into a nut",
+     "through": FLOOR, "length": 6.0, "into": "nut"},
+    {"part": "nut M2.5", "count": 4, "where": "under the Pi posts"},
+    # Until the DAC goes on: its own standoffs take these screws' place, their
+    # studs down through the Pi into the same threads.
+    {"part": "screw M2.5x6", "count": 4, "where": "the Pi, down onto its standoffs",
+     "through": PI_T, "into": "metal", "depth": STANDOFF_H - 1},
     {"part": "screw M2.5x6", "count": 4, "where": "screen, up through the posts' shelves into its nuts",
      "through": SHELF, "into": "metal", "depth": NUT_H},
 ] + ([
@@ -696,7 +727,7 @@ USES = [
 
 # Findings the design means, and why: (check, part, mm or None, why).
 ALLOW = [
-    ("thin", "plate", TONGUE_T, "the plates' end tongues: thin to slide down the base's grooves"),
+    ("thin", "Back plate", 1.3, "the cover over the unused micro-HDMI ports: a small patch, not a wall that takes load"),
 ]
 
 # Parts that go into each other by design: the Pi's header pins into the DAC's socket.
@@ -724,8 +755,8 @@ def main():
     else:
         groups["stand"] = [stand_model()]
     groups |= {
-        "pi": [pi_model(), heatsink_model()],
-        "fan": [fan_model()],
+        "pi": [pi_model(), heatsink_model()] + standoffs_model(),
+        **({"fan": [fan_model()]} if FAN else {}),
         "dac": dac_model(),
         "screen": screen_model(),
         "ribbon": ribbon_model(),
