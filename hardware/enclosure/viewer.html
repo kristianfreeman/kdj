@@ -200,7 +200,7 @@ async function load(stamp) {
     world.add(collisions);
   } catch (e) { /* none */ }
   const [w, d, h] = report.size_mm;
-  document.getElementById('size').textContent = `${w} × ${d} × ${h} mm · built in ${report.seconds} s`;
+  document.getElementById('size').textContent = `${report.pi ? report.pi + ' · ' : ''}${w} × ${d} × ${h} mm · built in ${report.seconds} s`;
   listProblems(report.problems);
   const list = document.getElementById('hits');
   list.innerHTML = '';

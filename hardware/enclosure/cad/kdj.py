@@ -1,6 +1,7 @@
 """kdj enclosure, slab layout, in build123d: the real parts in a printed box.
 
-The Raspberry Pi 4 is its published STEP model (parts/, fetched by
+The Raspberry Pi (a 4B, or a 5 with PI=5: one base takes either, each has
+its own I/O plates) is its published STEP model (parts/, fetched by
 cad/fetch-parts.sh); the 5" DSI screen is modelled from its manual (V1.4,
 section 3); the InnoMaker HiFi DAC HAT from its listing (its jack positions
 are a guess until measured: search MEASURE). The 15-pin ribbon runs from the
@@ -58,7 +59,7 @@ from build123d import (
 import checks
 
 HERE = Path(__file__).resolve().parent.parent
-LIVE = HERE / "live"
+LIVE = Path(os.environ.get("KDJ_LIVE", HERE / "live"))   # the viewer's; a second variant's check writes elsewhere
 OUT = HERE / "out"
 PARTS = HERE / "parts"
 MIN = (Align.MIN, Align.MIN, Align.MIN)
@@ -85,34 +86,67 @@ SCREEN_PI_HOLES = [(5 + 38.11 + dx, 5 + 16.5 + dy) for dx in (0, 58) for dy in (
 FPC_FROM_RIGHT = 13.48                      # ribbon connector from the right edge
 FPC_LEN = 46.01                             # it stands on end, centred on this run
 
-# --- The Pi 4 (its STEP model) ---------------------------------------------
+# --- The Pi: a 4B or a 5 (PI=4|5) ----------------------------------------------
+# The same board outline and mounting holes, so one base takes either; each
+# has its own pair of I/O plates, cut round its own ports. The Pi sits where
+# the Pi 4's furthest-reaching jacks put it (OVERHANG_*): the Pi 5's reach
+# less, so its connector faces sit a little further inside the plates.
+PI = os.environ.get("PI", "4")
 PI_W, PI_D, PI_T = 85.0, 56.0, 1.6
 PI_HOLES = [(3.5, 3.5), (61.5, 3.5), (3.5, 52.5), (61.5, 52.5)]
-DSI_ON_PI = (2.5, 28.0)                     # DISPLAY connector, Pi coordinates (approx.)
 # The Pi stands on four metal M-F 6+6 standoffs, each stud down through the
 # floor into a nut underneath: nothing printed takes the load.
 STANDOFF_H, STANDOFF_AF, NUT_T = 6.0, 5.0, 2.0   # body; across flats (standoff and nut); nut thickness
-SOC_ON_PI, SOC_H = (29.23, 32.63), 2.3         # the processor, from the STEP: 14.6 mm square
 HEATSINK = (14.0, 14.0, 6.0)                 # a stick-on aluminium one; clears the HAT by ~3 mm
+OVERHANG_S, OVERHANG_E = 2.50, 3.36          # where the Pi sits: the Pi 4's audio jack and USB 3 flange
 
-PAD_T = 0.1                                 # the STEP's copper pads, proud of the board
-# Ports that reach the I/O plates, measured from the STEP, in Pi coordinates:
-# name, edge ("s" = USB-C edge, "e" = USB-A end), extent along that edge,
-# extent in z above the board's bottom, how far it reaches past the edge,
-# shape ("relief": no hole, a recess inside the plate so it stays covered),
-# and a pocket (w, h) round the hole on the outside where a plug's moulded
-# grip has to reach in, or None. Measured from every face, solid or not; z
-# from the board's bottom (its top is at 1.7, with the pads).
-PI_PORTS = [
-    ("USB-C", "s", (6.73, 15.67), (0.90, 4.86), 1.20, "rect", (12.5, 7.0)),
-    ("HDMI 0", "s", (22.75, 29.25), (1.28, 4.54), 1.20, "relief", None),
-    ("HDMI 1", "s", (36.25, 42.75), (1.28, 4.54), 1.20, "relief", None),
-    ("Audio", "s", (51.0, 57.0), (1.70, 7.70), 2.50, "round", None),
-    ("USB 3", "e", (1.55, 16.45), (0.19, 17.31), 3.36, "rect", None),
-    ("USB 2", "e", (19.50, 34.50), (2.39, 18.04), 2.85, "rect", None),
-    ("Ethernet", "e", (37.80, 53.70), (-0.20, 15.35), 3.25, "rect", None),
-]
-OVERHANG_S, OVERHANG_E = 2.50, 3.36          # furthest past each edge: the audio jack, USB 3's flange
+# Ports that reach the I/O plates, measured from each STEP, in Pi coordinates
+# (x along the 85 mm edge, y from the USB-C edge): name, edge ("s" = USB-C
+# edge, "e" = USB-A end), extent along that edge, extent in z above the
+# board's bottom, how far it reaches past the edge, shape ("relief": no hole,
+# a recess inside the plate so it stays covered), and an opening (w, h) the
+# size of a plug's moulded grip, or None. The Pi 4's from every face, solid or
+# not; the Pi 5's from each connector's last 1.5 mm before its face.
+PIS = {
+    "4": {
+        "name": "Raspberry Pi 4",
+        "step": "raspberry_pi_4_model_b.step", "cache": "pi4-sewn.brep",
+        # Its file lies on its side, board in XZ, components toward +Y, its
+        # board's top at y = 0 under 0.1 mm copper pads.
+        "to_pi": Pos(0, 0, PI_T + 0.1) * Rot(90, 0, 0),
+        "ports": [
+            ("USB-C", "s", (6.73, 15.67), (0.90, 4.86), 1.20, "rect", (12.5, 7.0)),
+            ("HDMI 0", "s", (22.75, 29.25), (1.28, 4.54), 1.20, "relief", None),
+            ("HDMI 1", "s", (36.25, 42.75), (1.28, 4.54), 1.20, "relief", None),
+            ("Audio", "s", (51.0, 57.0), (1.70, 7.70), 2.50, "round", None),
+            ("USB 3", "e", (1.55, 16.45), (0.19, 17.31), 3.36, "rect", None),
+            ("USB 2", "e", (19.50, 34.50), (2.39, 18.04), 2.85, "rect", None),
+            ("Ethernet", "e", (37.80, 53.70), (-0.20, 15.35), 3.25, "rect", None),
+        ],
+        "soc": (29.23, 32.63, 4.0),          # centre, and its top above the board's bottom
+        "dsi": (2.5, 28.0, 7.5),             # DISPLAY connector (15-pin): centre, top
+        "ribbon": (16.0, 7.0 + PI_T),        # its width there; it folds flat this far above the board's bottom
+    },
+    "5": {
+        "name": "Raspberry Pi 5",
+        "step": "raspberry_pi_5.step", "cache": "pi5-sewn.brep",
+        # Its file lies on its side too, but centred, the board 1.4 thick from y = 0.1.
+        "to_pi": Pos(PI_W / 2, PI_D / 2, -0.1) * Rot(90, 0, 0),
+        "ports": [
+            ("USB-C", "s", (6.83, 15.57), (-0.26, 4.60), 1.30, "rect", (12.5, 7.0)),
+            ("HDMI 0", "s", (22.20, 29.40), (1.20, 4.80), 1.66, "relief", None),
+            ("HDMI 1", "s", (35.60, 42.80), (1.20, 4.80), 1.66, "relief", None),
+            ("Ethernet", "e", (2.20, 18.20), (2.00, 15.30), 3.00, "rect", None),
+            ("USB A", "e", (21.75, 36.35), (2.35, 17.85), 3.30, "rect", None),
+            ("USB B", "e", (39.70, 54.30), (2.35, 17.85), 3.30, "rect", None),
+        ],
+        "soc": (33.1, 22.8, 3.6),
+        # CAM/DISP 1 (22-pin, 0.5 mm): needs a 22-to-15-pin display cable.
+        "dsi": (48.75, 8.45, 5.5),
+        "ribbon": (12.0, 11.0),              # the 22-pin end; over the heatsink, under the HAT
+    },
+}[PI]
+PI_NAME, PI_PORTS = PIS["name"], PIS["ports"]
 FACE_INSET = 0.3                             # connector faces this far inside the outside surface
 HOLE_GAP = 0.3                               # round each connector in its plate
 
@@ -317,25 +351,24 @@ def sewn(model):
 
 
 def pi_model():
-    """The Pi 4 STEP, upright, its board's corner at the origin and its top
-    at z = PI_T, then turned and placed in the box. Cached as BREP."""
-    cache = PARTS / "pi4-sewn.brep"
-    src = PARTS / "raspberry_pi_4_model_b.step"
+    """The Pi's STEP, upright, its board's USB-C-edge corner at the origin and
+    its bottom at z = 0, then turned and placed in the box. Cached as BREP."""
+    cache = PARTS / PIS["cache"]
+    src = PARTS / PIS["step"]
     if cache.exists() and cache.stat().st_mtime > src.stat().st_mtime:
         pi = import_brep(str(cache))
     else:
         pi = sewn(import_step(str(src)))
         export_brep(pi, str(cache))
-    # Its file lies on its side: board in XZ, components toward +Y.
-    pi = Rot(90, 0, 0) * pi
-    pi = Pos(0, 0, PI_T + PAD_T) * pi
+    pi = PIS["to_pi"] * pi
     pi = Pos(*placed(0, 0, BOARD_Z)) * Rot(0, 0, 180) * pi
-    return tag(pi, "Raspberry Pi 4", "#2e7d32")
+    return tag(pi, PI_NAME, "#2e7d32")
 
 
 def heatsink_model():
-    x, y, _ = placed(*SOC_ON_PI)
-    z = BOARD_Z + PAD_T + PI_T + SOC_H
+    sx, sy, top = PIS["soc"]
+    x, y, _ = placed(sx, sy)
+    z = BOARD_Z + top
     return tag(Pos(x, y, z) * Box(*HEATSINK, align=CTR_XY), "Heatsink", "#b0b4ba")
 
 
@@ -409,21 +442,26 @@ def screen_model():
 
 
 def ribbon_model():
-    """The 15-pin, 1 mm ribbon (16 mm wide), as flat runs. The Pi's DISPLAY
-    connector sits under the HAT, 2.5 mm in from the board's edge, so the
-    ribbon folds flat just above it, runs out under the HAT past that edge,
-    then rises beside the stack to the screen's connector, which is a few mm
-    beyond the Pi's edge."""
+    """The display ribbon, as flat runs. The Pi's connector sits under the HAT,
+    so the ribbon folds flat just above it, jogs along y if it has to (the Pi
+    5's sits near the back, beyond the screen connector's run), runs out under
+    the HAT to the screen's connector (a few mm beyond the Pi's edge), and
+    rises beside the stack to it, at its 16 mm end."""
     w, t = 16.0, 0.15
-    px, py, _ = placed(*DSI_ON_PI)
-    leave = BOARD_Z + PAD_T + PI_T + 5.8               # top of the Pi's connector
-    fold = BOARD_Z + PI_T + 7.0                        # under the HAT (11.5 up)
+    dx, dy, top = PIS["dsi"]
+    wp, fold_at = PIS["ribbon"]
+    px, py, _ = placed(dx, dy)
+    leave, fold = BOARD_Z + top, BOARD_Z + fold_at
     fx = SCREEN_X + SCREEN_W - FPC_FROM_RIGHT
+    reach = (FPC_LEN - w) / 2                          # how far either way of centre it can land
+    sy = min(max(py, SCREEN_Y + SCREEN_D / 2 - reach), SCREEN_Y + SCREEN_D / 2 + reach)
     runs = [
-        Pos(px - t / 2, py - w / 2, leave) * Box(t, w, fold - leave, align=MIN),
-        Pos(min(px, fx), py - w / 2, fold) * Box(abs(fx - px), w, t, align=MIN),
-        Pos(fx - t / 2, py - w / 2, fold) * Box(t, w, SCREEN_Z - 2.5 - fold, align=MIN),
+        Pos(px - t / 2, py - wp / 2, leave) * Box(t, wp, fold - leave, align=MIN),
+        Pos(min(px, fx), sy - wp / 2, fold) * Box(abs(fx - px), wp, t, align=MIN),
+        Pos(fx - t / 2, sy - w / 2, fold) * Box(t, w, SCREEN_Z - 2.5 - fold, align=MIN),
     ]
+    if abs(sy - py) > 0.01:                            # the jog, flat, beside the Pi's connector
+        runs.append(Pos(px - wp / 2, min(py, sy), fold) * Box(wp, abs(sy - py), t, align=MIN))
     return [tag(r, "Ribbon", "#e0e0e0") for r in runs]
 
 
@@ -447,6 +485,19 @@ def plate_holes():
         # that size, straight through: a pocket would leave a thin frame.
         outline = RectangleRounded(*pocket, 1.5) if pocket else Circle(w / 2) if shape == "round" else RectangleRounded(w, h, 0.6)
         out.append((face, on_face(outline, face, at, WALL + 1, proud=0.5)))
+        # A hole closer to the plate's end than a wall can be thin runs out
+        # through the end instead: the base's corner closes it.
+        ow = pocket[0] if pocket else w
+        ends = BACK_PLATE_X if edge == "s" else LEFT_PLATE_Y
+        c = at[0] if edge == "s" else at[1]
+        for end, sign in ((ends[0] + SLIDE, -1), (ends[1] - SLIDE, 1)):
+            if sign * (c + sign * ow / 2 - (end - sign * TAPER)) > -checks.MIN_WALL:   # to the end at the outside face, its nearest
+                near, far = c, end + sign * 2
+                lo, span = min(near, far), abs(far - near)
+                hh = pocket[1] if pocket else h
+                cut = (Pos(lo, OUT_D - WALL - 1, z - hh / 2) * Box(span, WALL + 2, hh, align=MIN) if edge == "s"
+                       else Pos(-1, lo, z - hh / 2) * Box(WALL + 2, span, hh, align=MIN))
+                out.append((face, cut))
     hz = BOARD_Z + PI_T + HAT_GAP + HAT_T
     for name, jx, d, cz, _ in HAT_JACKS:
         if name in CUT_JACKS:
@@ -464,9 +515,11 @@ def plate_labels():
     usbc_z = BOARD_Z + sum(ports["USB-C"][3]) / 2
     low = (FLOOR + PLATE_LIFT + usbc_z - ports["USB-C"][6][1] / 2) / 2   # under the USB-C pocket
     out.append(("back", "5V", 3.0, (placed(sum(ports["USB-C"][2]) / 2, 0)[0], OUT_D, low)))
-    out.append(("back", "AUX", 3.0, (placed(sum(ports["Audio"][2]) / 2, 0)[0], OUT_D, low)))
-    side_z = BOARD_Z + max(ports[n][3][1] for n in ("USB 3", "USB 2", "Ethernet")) + HOLE_GAP + 4
-    usb_y = (placed(0, sum(ports["USB 3"][2]) / 2)[1] + placed(0, sum(ports["USB 2"][2]) / 2)[1]) / 2
+    if "Audio" in ports:                            # the Pi 5 has none
+        out.append(("back", "AUX", 3.0, (placed(sum(ports["Audio"][2]) / 2, 0)[0], OUT_D, low)))
+    side_z = BOARD_Z + max(p[3][1] for p in PI_PORTS if p[1] == "e") + HOLE_GAP + 4
+    usbs = [p for p in PI_PORTS if p[1] == "e" and p[0].startswith("USB")]
+    usb_y = sum(placed(0, sum(p[2]) / 2)[1] for p in usbs) / len(usbs)
     out.append(("left", "USB", 4.0, (0, usb_y, side_z)))
     out.append(("left", "LAN", 4.0, (0, placed(0, sum(ports["Ethernet"][2]) / 2)[1], side_z)))
     return [(face, label_solid(t, size, face, at)) for face, t, size, at in out]
@@ -727,11 +780,12 @@ USES = [
 
 # Findings the design means, and why: (check, part, mm or None, why).
 ALLOW = [
-    ("thin", "Back plate", 1.3, "the cover over the unused micro-HDMI ports: a small patch, not a wall that takes load"),
+    ("thin", "Back plate", 1.3 if PI == "4" else 0.84,
+     "the cover over the unused micro-HDMI ports: a small flat patch, printed as solid bottom layers, not a wall that takes load"),
 ]
 
 # Parts that go into each other by design: the Pi's header pins into the DAC's socket.
-MATES = [{"Raspberry Pi 4", "DAC socket"}]
+MATES = [{PI_NAME, "DAC socket"}]
 
 
 def boxes_meet(a, b):
@@ -806,8 +860,11 @@ def main():
     # The plates outside face down: the back turned about x, the left about y.
     flat = {"back": Pos(0, 0, OUT_D) * Rot(-90, 0, 0), "left": Rot(0, -90, 0)}
     for (face, plate), fill in zip(zip(("back", "left"), groups["plates"]), groups["labels"][1:3]):
-        atomic(OUT / f"plate-{face}.stl", lambda f: export_stl(flat[face] * plate, f))
-        atomic(OUT / f"plate-{face}-labels.stl", lambda f: export_stl(flat[face] * fill, f))
+        # Each Pi has its own pair: plate-back-pi4.stl, plate-left-pi5.stl, ...
+        atomic(OUT / f"plate-{face}-pi{PI}.stl", lambda f: export_stl(flat[face] * plate, f))
+        atomic(OUT / f"plate-{face}-pi{PI}-labels.stl", lambda f: export_stl(flat[face] * fill, f))
+        for stale in (f"plate-{face}.stl", f"plate-{face}-labels.stl"):   # from before there were two
+            (OUT / stale).unlink(missing_ok=True)
     for i, angle in enumerate(LEGS) if KICKSTAND else []:
         atomic(OUT / f"leg-{angle}-label.stl", lambda f: export_stl(Pos(0, 0, LEG_T / 2 - AXIS_Z) * leg_label(i, angle), f))
         atomic(OUT / f"leg-{angle}.stl", lambda f: export_stl(Pos(0, 0, LEG_T / 2 - AXIS_Z) * leg_model(i, angle, False), f))
@@ -864,6 +921,7 @@ def main():
         os.remove(LIVE / "collisions.glb")
     report = {
         "size_mm": [round(OUT_W, 1), round(OUT_D, 1), round(TOP_Z + (FEET_H if KICKSTAND else 0), 1)],
+        "pi": PI_NAME,
         "angle": TILT if KICKSTAND else ANGLE,
         # The parts are exported in the box's frame; the viewer tilts them onto the desk with this (row-major 4x4).
         "on_desk": [on_desk.wrapped.Transformation().Value(r, c) for r in (1, 2, 3) for c in (1, 2, 3, 4)] + [0, 0, 0, 1],

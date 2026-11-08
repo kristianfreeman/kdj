@@ -8,4 +8,13 @@
 set -eu
 cd "$(dirname "$0")/../hardware/enclosure"
 docker image inspect kdj-cad >/dev/null 2>&1 || docker build -q -t kdj-cad cad >/dev/null
-docker run --rm -v "$PWD:/w" -w /w kdj-cad python cad/kdj.py --check 2> >(grep -v '^Fontconfig' >&2)
+# Both Pis: the 4B's build is the one the viewer shows; the 5's (its plates)
+# writes its viewer files to a scratch folder.
+status=0
+for pi in 4 5; do
+    echo "— Raspberry Pi $pi"
+    docker run --rm -v "$PWD:/w" -w /w -e PI=$pi -e KICKSTAND -e FAN \
+        $([ $pi = 4 ] || echo "-e KDJ_LIVE=/tmp/live") \
+        kdj-cad python cad/kdj.py --check 2> >(grep -v '^Fontconfig' >&2) || status=1
+done
+exit $status

@@ -6,6 +6,7 @@
 # http://localhost:8720/viewer.html
 #
 #   tools/enclosure-live.sh [PORT]
+#   PI=5 tools/enclosure-live.sh      # the Pi 5 and its plates (default: the 4B)
 set -u
 cd "$(dirname "$0")/../hardware/enclosure"
 port=${1:-8720}
@@ -17,7 +18,7 @@ docker image inspect kdj-cad >/dev/null 2>&1 || docker build -q -t kdj-cad cad >
 
 build() {
     echo "enclosure-live: building"
-    docker run --rm -v "$PWD:/w" -w /w kdj-cad python cad/kdj.py 2>&1 | tail -n 3 | sed 's/^/  /'
+    docker run --rm -v "$PWD:/w" -w /w -e PI -e KICKSTAND -e TILT -e ANGLE -e FAN kdj-cad python cad/kdj.py 2>&1 | tail -n 3 | sed 's/^/  /'
 }
 
 touch "$mark"
