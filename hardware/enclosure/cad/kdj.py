@@ -161,6 +161,9 @@ HOLE_GAP = 0.3                               # round each connector in its plate
 HAT_W, HAT_D, HAT_T = 65.0, 57.0, 1.6
 HAT_GAP = 20.0                              # Pi board top to HAT board bottom: the standoffs
 HAT_OVER = 0.75                             # its jack edge past the Pi's USB-C edge ("0.5, maybe 1")
+HAT_SAG = 1.0                               # on the header alone, without the standoffs, it sits this much lower:
+                                            # the jack holes and the board's groove reach down for it
+                                            # (the 3.5 mm jack's square body, 0.3 mm round, jammed on it)
 # Jacks along that edge, as boxes: name, from and to (from its microSD-end
 # edge, which is over the Pi's: Pi x), top above the HAT board's top, reach
 # past its edge. Looking at them from outside: LINE, L (white), R (red).
@@ -511,14 +514,14 @@ def plate_holes():
     hz = BOARD_Z + PI_T + HAT_GAP + HAT_T
     for name, a0, a1, top, _ in HAT_JACKS:          # each jack's body, HOLE_GAP round
         if name in CUT_JACKS:
-            at = (placed((a0 + a1) / 2, 0)[0], OUT_D, hz + top / 2)
-            out.append(("back", on_face(RectangleRounded(a1 - a0 + 2 * HOLE_GAP, top + 2 * HOLE_GAP, 0.6), "back", at, WALL + 1, proud=0.5)))
+            at = (placed((a0 + a1) / 2, 0)[0], OUT_D, hz + (top - HAT_SAG) / 2)
+            out.append(("back", on_face(RectangleRounded(a1 - a0 + 2 * HOLE_GAP, top + HAT_SAG + 2 * HOLE_GAP, 0.6), "back", at, WALL + 1, proud=0.5)))
     # The DAC's board edge reaches HAT_OVER past the Pi's, into the plate: a
     # groove inside for it.
     into = HAT_OVER - (FACE_INSET + OVERHANG_S - WALL)
     if into > -HOLE_GAP:
-        out.append(("back", Pos(PI_X + PI_W - HAT_W - HOLE_GAP, OUT_D - WALL - 0.5, hz - HAT_T - HOLE_GAP)
-                    * Box(HAT_W + 2 * HOLE_GAP, 0.5 + into + HOLE_GAP, HAT_T + 2 * HOLE_GAP, align=MIN)))
+        out.append(("back", Pos(PI_X + PI_W - HAT_W - HOLE_GAP, OUT_D - WALL - 0.5, hz - HAT_T - HAT_SAG - HOLE_GAP)
+                    * Box(HAT_W + 2 * HOLE_GAP, 0.5 + into + HOLE_GAP, HAT_T + HAT_SAG + 2 * HOLE_GAP, align=MIN)))
     out.append(("back", Pos(SCREEN_X + 5 + 15.03 - 1, OUT_D - WALL - 1, BASE_H - 5) * Box(8, WALL + 2, 6, align=MIN)))
     return out
 
@@ -854,7 +857,9 @@ def main():
     # side, 10 mm high: the Pi's posts, both plates' grooves, the rails'
     # bosses (screw the rails and a leg on to try the hinge). And a template
     # the size of the screen's opening, holed where its nuts should land.
-    corner = groups["base"][0] & (Pos(0, 18, 0) * Box(115, OUT_D - 18, 10, align=MIN))
+    # From y 6: cut at 18 it left 2 mm of left wall in front of the plate's
+    # opening, a pole the plate's end snapped off.
+    corner = groups["base"][0] & (Pos(0, 6, 0) * Box(115, OUT_D - 6, 10, align=MIN))
     atomic(OUT / "test-corner.stl", lambda f: export_stl(corner, f))
     template = Box(SCREEN_W + 2 * GAP, SCREEN_D + 2 * GAP, 1.2, align=MIN)
     nuts = [(SCREEN_W / 2 + sx * CORNER_HOLES[0] / 2, SCREEN_D / 2 + sy * CORNER_HOLES[1] / 2) for sx in (-1, 1) for sy in (-1, 1)]
