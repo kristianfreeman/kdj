@@ -1,252 +1,148 @@
 # kdj
 
-One DJ deck for a Raspberry Pi 4 feeding a Xone:96 channel: transport, CDJ-style
-cue, tempo with key lock, beat-quantized loops, Pioneer 3-band waveforms.
+A DJ deck in Rust, one per Raspberry Pi. Each Pi plays one deck into a
+channel of an Allen & Heath Xone:96. Two Pis make decks A and B, and a
+Xone:K3 plugged into either of them plays both. kdj reads Rekordbox USB
+exports the way a CDJ does, so tracks arrive with their beat grids,
+waveforms and cues.
 
-## Play a track
+kdj is a work in progress, at version 0.3. Two Pis run it at home for
+practice sets; the interface, the settings and the enclosure keep
+changing.
 
-```bash
-cargo run --release -p kdj
-```
+![Deck A playing](docs/screens/deck-playing.png)
 
-It opens in the browser: your Rekordbox collection and any Rekordbox USB
-export that's plugged in. Like a CDJ, a prepared track brings its own grid,
-3-band waveform, memory cue and hot cues; anything else is analysed on load
-and marked "auto grid". Loading is refused while the deck plays.
+## The rig
 
-Options: `TRACK` (load a file directly), `--decks 2` (two decks stacked and
-mixed, for beatmatching), `--fullscreen`, `--buffer 128` (frames per audio
-callback), `--device NAME` (the audio output whose name contains NAME; if none
-matches, it lists them and plays on the default one), `--hud` (perf overlay), `--keymap
-keys.toml`, `--midi k3.toml` / `--midi-learn k3.toml` / `--midi-port NAME`
-(see MIDI controllers), `--no-link` (stay out of Ableton Link sessions),
-`--synth` (synthetic tracks, no files needed).
+| Part | What it is |
+|---|---|
+| Computer | Raspberry Pi 4 (the enclosure takes a Pi 5 too) |
+| Audio | InnoMaker HiFi DAC HAT (PCM5122, the HiFiBerry DAC+ driver), line out to the mixer |
+| Screen | Hosyond 5" DSI touchscreen, 800×480 |
+| Controller | Xone:K3, split down the middle: deck A on the left, deck B on the right |
+| Mixer | Xone:96 |
+| Network | Ethernet between the Pis, carrying controls, Ableton Link and shared sticks |
 
-On macOS this needs SDL2: `brew install sdl2`.
+The Pi boots from an SD card image straight into the deck, full screen,
+with no desktop. [`deploy/pi`](deploy/pi/README.md) builds that image and
+sets up the DAC, USB mounting and the service.
 
-## Keys
+## What it does
 
-| Key | Action | Key | Action |
-|---|---|---|---|
-| Space | play / pause | C | cue (hold to preview) |
-| ↑ / ↓ | tempo ±0.02% (±0.05% on ±16) | PgUp / PgDn | tempo ±1% |
-| R | tempo reset | T | range ±8 / ±16 |
-| K | key lock | Q | quantize |
-| → / ← | nudge, building while held (step ⅛ beat when stopped) | L | loop on / off |
-| 1–6 | beat loop 1, 2, 4, 8, 16, 32 | [ / ] | halve / double loop |
-| , / . | beat jump back / forward by loop size | G | bar 1 here |
-| - / = | grid earlier / later 2 ms | ; / ' | BPM ∓0.01 |
-| H / D | halve / double BPM | Z / X | zoom out / in |
-| F1–F8 | hot cues A–H (empty: store here) | 9 / 0 | jog back / forward |
-| 7 / 8 | phase step −2 / +2 ms | \` | perf overlay |
-| Tab | browser | \\ | switch deck (two decks); hold Shift for the other deck |
-| S | SYNC: follow the Link session | M | MASTER: lead the Link session |
+### Tracks
 
-In the browser: ↑/↓ and PgUp/PgDn move, ↵ opens or loads, → opens, ←
-backs out, Tab closes. Play, cue and anything not listed still reach the deck.
+Plug in a Rekordbox USB stick and the browser lists its playlists and
+tracks. A track Rekordbox analysed brings its grid, three-band waveform,
+memory cue and hot cues. kdj analyses anything else on load and marks it
+"auto grid". MP3s with a LAME header land where Rekordbox's grid expects
+them, because the decoder keeps the encoder's lead-in the way Rekordbox
+does.
 
-The browser shows keys on the Camelot wheel ("8A"); Settings › Display ›
-Key names switches to Rekordbox's names ("Am"). It marks the tracks that mix
-in key with the one you'd mix into: the track playing on another deck
-(MASTER first, on any kdj), else the one loaded on another deck, else the
-one on this deck. That key sits beside the KEY heading. A track in the same
-key has its key on a solid amber block, and one a step away on the wheel (an
-hour either way, or the relative major or minor) has it boxed in amber.
-Clashing keys stay plain and grey.
+The kdjs share their sticks. A track loads onto either deck whichever Pi
+holds its stick; it crosses the network whole and plays from memory, so
+the stick can come out once the track is on.
 
-Override any of these in a TOML file passed with `--keymap`:
+The browser shows keys on the Camelot wheel (Settings › Display switches
+to Rekordbox's names) and marks the tracks that mix with the one playing
+on the other deck: the same key on an amber block, a neighbour on the
+wheel boxed in amber.
 
-```toml
-[keys]
-Return = "Cue"
+![Browser with key marks](docs/screens/browser-mixing-in-key.png)
 
-[browser_keys]
-Space = "BrowseLoad"
-```
+### Playing
 
-## Touch
+CDJ-style cue, hot cues A to H, beat loops and beat jumps, quantize, key
+lock (Signalsmith Stretch), nudging, and a ±8 or ±16 tempo range. A
+tempo fader on the controller takes over once it reaches the deck's tempo,
+so nothing jumps. The audio thread runs at realtime priority on 128-frame
+buffers, 2.7 ms at 48 kHz.
 
-On the touchscreen (or with a mouse) every control on screen is a button:
-play, CUE (previews while held), the loop sizes and LOOP, and the MASTER /
-SYNC / KEY / Q / range badges. Tap the title to open the browser. Touch or
-drag along the overview to needle-search while the deck is stopped; a
-playing deck ignores it, like a CDJ's needle lock. In the browser, tap a
-row to highlight it and tap it again to open or load it; drag to scroll; tap
-the path at the top to go back and the bottom-right corner to close.
+### Sync
 
-## Ableton Link
+Every deck joins the Ableton Link session on the network. One deck holds
+MASTER across all the Pis, as with CDJs. When the master stops, the next
+deck playing on SYNC takes MASTER over. SYNC matches tempo and bars, then
+holds the beat and keeps any nudge you added.
 
-Every deck joins the Link session on the local network (`--no-link` to
-opt out), so two Pis, or a deck and Ableton Live, share tempo and phase over
-Ethernet.
+To beatmatch by ear with SYNC off, double tap the deck screen for the sync
+view. A strip across the top shows both decks' beat markers, CDJ-style.
+Below it, a Lissajous figure turns while the tempos differ, holds still
+when they match, and folds onto the diagonal in phase, pulsing on the
+beat. The other deck can sit on the other Pi: Link's session beat gives
+both Pis one clock to place each other's beats by.
 
-- MASTER (M) makes a deck's tempo the session's tempo. One deck is master
-  on the whole network, like CDJs: taking it, on this kdj or another, hands
-  the old master back to SYNC. Pressing it again does nothing (another deck
-  takes it), and so does SYNC on the master. A deck on SYNC takes over from
-  where it is, nudges and all, so nothing playing moves (one that's stopped
-  fits the session when it starts, then leads); a deck not on SYNC brings
-  the session's bars to it. When the master stops, a deck playing on SYNC
-  takes it, so moving on to the next track moves MASTER with it; a deck
-  given MASTER while stopped keeps it till it plays. A stopped master only
-  sets the tempo; nudging the master moves the session's phase, not its tempo.
-- SYNC (S) follows the session: it matches the tempo (or its half or double:
-  a 70 BPM grid follows 140) and, when it goes on or the deck starts, lines
-  the bars up with one click-free jump if they're far out, then gentle tempo
-  trims. From then on it holds the beat: a beat jump or a loop moves the bar
-  alignment with it instead of being undone, and a loop that isn't whole
-  beats follows the tempo only. Turning SYNC off keeps the synced tempo.
+![Sync view, a quarter beat apart](docs/screens/sync-view-quarter-of-a-beat-out.png)
 
-With `--no-link` (or a build without Link), SYNC and MASTER still work
-between the decks of one `--decks 2` process, on a session of their own.
-The header shows SYNC / MASTER and, on Link, the number of peers. Builds need
-cmake and libclang for Link; build without it with `--no-default-features`.
+### Screen and controls
 
-## MIDI controllers
+You can touch anything on screen: play, cue, the loop sizes, the badges,
+and the overview strip for needle search while stopped. The ‹ at the top
+left of the browser and settings goes back a step, and holding a K3
+encoder's push does the same. The K3's LEDs follow each deck's state.
+MIDI learn maps other controllers.
 
-Any MIDI controller works; map it once with MIDI learn, which asks for each
-control in turn (play, cue, jog encoder, tempo encoder, loops, hot cues,
-browser…) and writes a mapping file:
+- K3 layout: [`config/xone-k3.toml`](config/xone-k3.toml), with a
+  drawing in [`docs/xone-k3.svg`](docs/xone-k3.svg)
+- Keyboard: [`crates/kdj-engine/src/keymap.rs`](crates/kdj-engine/src/keymap.rs),
+  with overrides through `--keymap FILE`
+- Every screen state: [`docs/screens`](docs/screens/README.md)
+
+## Unfinished
+
+- The settings screen shows more than it controls. Key names, the deck
+  letter and Wi-Fi take effect. Key lock, quantize, zoom, the phase meter
+  and the rest show a value and change nothing yet, and no setting
+  survives a restart.
+- With quantize on, a hot cue pressed a few milliseconds before the beat
+  plays a sliver of audio from before the cue.
+- The boot splash (logo, then a progress bar) isn't built.
+- The enclosure exists in CAD and in test prints.
+
+## Develop
+
+You need Rust (the version in `rust-toolchain.toml`), SDL2 (`brew install
+sdl2` on macOS), and cmake with libclang for Link. Build without Link
+with `--no-default-features`.
 
 ```bash
-cargo run --release -p kdj -- --midi-learn k3.toml
-cargo run --release -p kdj -- --midi k3.toml
-```
-
-The mapping's `port` is part of the controller's input name (ALSA's
-trailing client:port numbers, which change between boots, are ignored);
-without one the first input that isn't ALSA's "Midi Through" is used.
-`--midi-port NAME` picks the port for both `--midi` and `--midi-learn`,
-overriding the file. Pads and buttons press and release; endless encoders
-send one press-and-release per click (jog, tempo, loop size, browse);
-faders are absolute. The
-deck waits for the controller if it isn't there yet and reconnects on its
-own if it's unplugged. Deck actions go from the MIDI
-thread straight into the engine, without waiting for a screen frame. See
-`config/midi-example.toml` for the format.
-
-Buttons light up with the deck's state, like a CDJ's: play while playing,
-cue at the cue point, SYNC, MASTER, key lock, quantize, the active loop size
-and LOOP, stored hot cues. The light goes to the button's own note on its
-channel, which is how most controllers (the Xone:K2/K3 included) address
-their LEDs; `led_offset` picks a K3 colour (0 red, 36 amber, 72 green) and
-`leds = false` turns it off.
-
-A fader can be the tempo fader (`fader = "Tempo"`; MIDI learn asks for
-it). Like a CDJ's, pulled towards you is faster. It takes over only once
-it reaches the deck's tempo, so after SYNC or a tempo button nothing
-jumps; until then the screen shows where it is as a hollow marker beside
-the tempo. SYNC owns the tempo while it's on.
-
-Settings › Controller › Mapping draws the controller with what each
-control does: deck A's controls filled, deck B's outlined, the focused
-deck's dark, unmapped ones faint. Controller layouts are data in
-`config/devices/` (the Xone:K3 so far), found by the mapping's `port`; a
-mapping for anything else shows as a table. The same drawing as SVG, for
-docs: [`docs/xone-k3.svg`](docs/xone-k3.svg), from `kdj-sim device`.
-
-### One controller, two Pis
-
-Each Pi is one deck, with its own output into its own mixer channel. They
-find each other on the network and take a deck letter each (the first free
-one, or `--deck B`; Settings → Sync → This deck changes it), shown beside
-the track title. A mapping's `deck = 0` controls play deck A and `deck = 1`
-deck B, whichever Pi the controller is plugged into: controls for the other
-deck go to it across the network as they are, and its LEDs come back the
-same way. `config/xone-k3.toml` splits a K3 down the middle, the same layout
-on each side; alone, a Pi plays from the left half (or the right, as B).
-The network wants to be wired: Wi-Fi adds latency to every press.
-
-### Sharing sticks, like Pro DJ Link
-
-Each kdj shares its USB sticks with the others, and browses theirs: the
-browser's sources list every stick on the network ("KRISTIAN · deck B"),
-and a track loads onto any deck whichever kdj its stick is in. It comes
-across whole and plays from memory, so the network and the stick can go
-once it's on (the deck says "from B"). The kdj with the stick says
-"KRISTIAN in use by B: leave it in" while another deck has a track from it
-or is loading one. `kdj --serve` shares a machine's library without being a
-deck: a laptop's Rekordbox collection, say. See `crates/kdj/src/share.rs`
-and `docs/plans/library-sharing.md`.
-
-## Raspberry Pi
-
-[`deploy/pi`](deploy/pi/README.md) turns Raspberry Pi OS Lite into a deck:
-it builds on the Pi, boots straight into the deck full screen, mounts USB
-sticks for the browser, and sets up the DAC hat. On Linux the audio thread
-runs at realtime priority (`SCHED_FIFO`) and memory is locked when the
-service's limits allow; the log says whether it did.
-
-## Develop on this computer
-
-```bash
-make dev          # the deck in a window here, rebuilt and restarted ~2 s after any change
+make dev          # the deck in a window, rebuilt on every change
 make story-live   # every screen, redrawn on every change: http://localhost:8710
+make check        # lint, tests, scripted scenarios
+make deploy       # this checkout onto the Pis over SSH, no reflash
+make image        # an SD card image, then `make flash` to write one
 ```
 
-`make dev` is the deck as on the Pi (800×480, the Xone:K3 map, your
-Rekordbox collection and USB sticks); `make dev ARGS="--decks 2"` for two
-decks, `ARGS=--synth` for a test track. `make deploy` then puts it on the
-Pis over the network.
+`make hooks` turns on a pre-commit hook that redraws `docs/screens`, so a
+commit's diff shows what it did to each screen. `make linux` lints, tests
+and builds for the Pi's arm64 in Docker.
 
-## Simulate
+`kdj-sim` runs the deck headless on a virtual audio clock: scripted
+scenarios, perf budgets, PNG frames, a key lock listening test, and a
+comparison of kdj's grid detection with your Rekordbox grids. The top of
+[`crates/kdj-sim/src/main.rs`](crates/kdj-sim/src/main.rs) lists its
+commands.
 
-Every screen, as the Pi's 800×480 panel shows it, is in
-[`docs/screens`](docs/screens/README.md). `make hooks` once per clone turns
-on the pre-commit hook that redraws them whenever a commit touches the code,
-so each commit's diff shows what it did to every screen; `make screens`
-redraws them by hand.
-
-Everything except the window and the sound card runs headless in `kdj-sim`:
-
-```bash
-cargo run --release -p kdj-sim -- scenarios                 # scripted sessions in scenarios/
-cargo run --release -p kdj-sim -- perf                      # perf budgets (perf-budgets.toml)
-cargo run --release -p kdj-sim -- analyze ~/Music/*.mp3     # detected BPM and bar 1 for real files
-cargo run --release -p kdj-sim -- frame out.png --loop 4    # render the screen to PNG
-cargo run --release -p kdj-sim -- frame out.png --decks 2   # two decks with the phase meter
-cargo run --release -p kdj-sim -- browser out.png --open "Collection"   # the browser
-cargo run --release -p kdj-sim -- rekordbox bench           # our detector vs your Rekordbox grids
-cargo run --release -p kdj-sim -- frame out.png --link 135  # alone on Link: phase against the session
-cargo run --release -p kdj-sim -- frame out.png --fader -5  # a tempo fader that hasn't caught up
-cargo run --release -p kdj-sim -- ab track.mp3 --tempo 6    # key lock listening test (target/ab)
-cargo run --release -p kdj-sim -- story                     # every screen state on one page (target/storybook)
-cargo run --release -p kdj-sim -- device config/xone-k3.toml > docs/xone-k3.svg   # a mapping drawn on its controller
-```
-
-`ab` renders the same 30 s of a track as it is, sped up without key lock,
-and with key lock in the deck's preset and Signalsmith's heavier one, for
-comparing by ear.
-
-## Tests
-
-`cargo test` is the fast suite (well under a second of test time): engine
-behaviour, a few tempos of grid detection, and the Rekordbox readers on the
-2-track demo export. The full suite adds the 16-tempo sweep and a
-row-by-row comparison with rekordcrate over a real ~3,900-track export; run
-it occasionally:
-
-```bash
-cargo test -- --ignored
-```
-
-`make linux` lints, tests and builds on Linux arm64 (the Pi's platform) in
-Docker, with the packages the Pi setup installs. The toolchain is pinned in
-`rust-toolchain.toml`, so lints are the same everywhere.
+`cargo test` runs the fast suite. `cargo test -- --ignored` adds the slow
+ones: a sweep over 16 tempos and a row-by-row check against rekordcrate on
+a 3,900-track export.
 
 ## Layout
 
-- `crates/kdj-engine`: transport, loops, hot cues, nudging, key lock, fallback analysis. No I/O, no UI.
-- `crates/kdj-library`: Rekordbox data: analysis files (grids, cues, waveforms) and `export.pdb`.
-- `crates/kdj-ui`: the 800×480 screen in OpenGL (3.3 core / ES 3.0).
-- `crates/kdj`: the app: SDL2 window, cpal audio, keyboard, touch, MIDI, Ableton Link.
-- `crates/kdj-sim`: virtual audio clock, scenarios, perf budgets, PNG frames.
-- `crates/kdj-flash`: SD cards: what's on them, and writing the deck's image to one.
-- `deploy/pi`: Raspberry Pi setup: build, boot-to-deck service, USB mounting, boot config.
+| Path | Contents |
+|---|---|
+| `crates/kdj-engine` | Transport, loops, hot cues, nudging, key lock, sync, fallback analysis. No I/O, no UI. |
+| `crates/kdj-library` | Rekordbox data: `export.pdb`, analysis files, keys on the Camelot wheel |
+| `crates/kdj-ui` | The 800×480 screen in OpenGL (3.3 core, ES 3.0) |
+| `crates/kdj` | The app: SDL2 window, audio, touch, MIDI, Link, the network between kdjs |
+| `crates/kdj-sim` | The headless simulator and the screen storybook |
+| `crates/kdj-flash` | SD cards: what's on them, and writing the image to one |
+| `deploy/pi` | Raspberry Pi setup and the image build |
+| `hardware/enclosure` | The enclosure: CAD (build123d, OpenSCAD), parts on hand, test prints |
+| `docs` | Screens, the K3 drawing, plans |
 
 ## Licence
 
-GPL-3.0-or-later (see `LICENSE`), so the deck can sync with Ableton Link,
-which is GPL-2.0-or-later. Geist (in `assets/fonts`) is under the SIL Open
-Font License 1.1 (`assets/fonts/OFL.txt`). The test fixtures in
-`crates/kdj-library/tests/fixtures` come from rekordcrate (MPL-2.0).
+GPL-3.0-or-later (see `LICENSE`), because kdj links Ableton Link, which is
+GPL-2.0-or-later. Geist (in `assets/fonts`) is under the SIL Open Font
+License 1.1. The test fixtures in `crates/kdj-library/tests/fixtures` come
+from rekordcrate (MPL-2.0).
