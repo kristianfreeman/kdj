@@ -155,29 +155,27 @@ FACE_INSET = 0.3                             # connector faces this far inside t
 HOLE_GAP = 0.3                               # round each connector in its plate
 
 # --- The DAC HAT (InnoMaker HiFi DAC) -------------------------------------
-# Measured with calipers, 2026-11-08. Its header seats it 19 mm above the
-# Pi; the kit's nearest standoff is 20 (M-F 20+6, stud down through the Pi
-# into the base's standoffs), which holds it 1 mm up the pins, still well in.
+# Measured with calipers, 2026-11-08. It stands on the kit's M-F 15+6
+# standoffs (stud down through the Pi into the base's standoffs): 15 mm,
+# Pi board top to DAC board underside.
 HAT_W, HAT_D, HAT_T = 65.0, 57.0, 1.6
-HAT_GAP = 20.0                              # Pi board top to HAT board bottom: the standoffs
+HAT_GAP = 15.0                              # Pi board top to HAT board bottom: the standoffs
 HAT_OVER = 0.75                             # its jack edge past the Pi's USB-C edge ("0.5, maybe 1")
-HAT_SAG = 1.0                               # on the header alone, without the standoffs, it sits this much lower:
-                                            # the jack holes and the board's groove reach down for it
-                                            # (the 3.5 mm jack's square body, 0.3 mm round, jammed on it)
+JACK_SLACK = 0.5                            # more room above and below each jack than HOLE_GAP: caliper readings (the RCAs are 2.5 apart, no room at the sides)
 # Jacks along that edge, as boxes: name, from and to (from its microSD-end
 # edge, which is over the Pi's: Pi x), bottom and top above the HAT board's
 # underside, reach past its edge. Looking at them from outside: LINE, L
-# (white), R (red). The 3.5 mm jack is under the board, hanging towards the
-# Pi: 5 mm tall, its far face 7 from the board's underside... measured as
-# 1.6 of board and 5 of jack.
-HAT_JACKS = [("3.5 mm", 12.0, 24.0, -5.0, 0.0, 3.5),      # under the board
+# (white), R (red). All three sit on the board's top.
+HAT_JACKS = [("3.5 mm", 12.0, 24.0, HAT_T, 7.0, 3.5),     # top 7 from the underside, about 5 tall
              ("RCA L", 30.0, 41.0, HAT_T, 13.3, 7.0),     # white: 30-41
              ("RCA R", 43.5, 54.5, HAT_T, 13.3, 7.0)]     # red: 44-54, as wide as the white
 JACK_DEPTH = 12.0                           # how far each body runs back from the edge (not measured; inside, out of the way)
 CUT_JACKS = ("RCA L", "RCA R", "3.5 mm")
 
 # --- The box ---------------------------------------------------------------
-WALL, FLOOR, GAP, LIP, CLEARANCE, PORT_GAP = 2.4, 2.0, 0.6, 2.5, 1.7, 1.0   # CLEARANCE: 2.0 less the RCAs' 0.3 remeasured, keeping the box
+WALL, FLOOR, GAP, LIP, CLEARANCE, PORT_GAP = 2.4, 2.0, 0.6, 2.5, 6.7, 1.0
+# CLEARANCE: air over the RCAs. 6.7 keeps the box the height it was drawn
+# with the DAC 5 mm higher, so the left plate already printed still fits.
 IN_W = max(SCREEN_W, PI_W + 10) + 2 * GAP
 IN_D = max(SCREEN_D, PI_D + 10) + 2 * GAP
 OUT_W, OUT_D = IN_W + 2 * WALL, IN_D + 2 * WALL
@@ -517,14 +515,14 @@ def plate_holes():
     hz = BOARD_Z + PI_T + HAT_GAP + HAT_T
     for name, a0, a1, z0, z1, _ in HAT_JACKS:       # each jack's body, HOLE_GAP round
         if name in CUT_JACKS:
-            at = (placed((a0 + a1) / 2, 0)[0], OUT_D, hz - HAT_T + (z0 + z1 - HAT_SAG) / 2)
-            out.append(("back", on_face(RectangleRounded(a1 - a0 + 2 * HOLE_GAP, z1 - z0 + HAT_SAG + 2 * HOLE_GAP, 0.6), "back", at, WALL + 1, proud=0.5)))
+            at = (placed((a0 + a1) / 2, 0)[0], OUT_D, hz - HAT_T + (z0 + z1) / 2)
+            out.append(("back", on_face(RectangleRounded(a1 - a0 + 2 * HOLE_GAP, z1 - z0 + 2 * (HOLE_GAP + JACK_SLACK), 0.6), "back", at, WALL + 1, proud=0.5)))
     # The DAC's board edge reaches HAT_OVER past the Pi's, into the plate: a
     # groove inside for it.
     into = HAT_OVER - (FACE_INSET + OVERHANG_S - WALL)
     if into > -HOLE_GAP:
-        out.append(("back", Pos(PI_X + PI_W - HAT_W - HOLE_GAP, OUT_D - WALL - 0.5, hz - HAT_T - HAT_SAG - HOLE_GAP)
-                    * Box(HAT_W + 2 * HOLE_GAP, 0.5 + into + HOLE_GAP, HAT_T + HAT_SAG + 2 * HOLE_GAP, align=MIN)))
+        out.append(("back", Pos(PI_X + PI_W - HAT_W - HOLE_GAP, OUT_D - WALL - 0.5, hz - HAT_T - JACK_SLACK - HOLE_GAP)
+                    * Box(HAT_W + 2 * HOLE_GAP, 0.5 + into + HOLE_GAP, HAT_T + 2 * (JACK_SLACK + HOLE_GAP), align=MIN)))
     out.append(("back", Pos(SCREEN_X + 5 + 15.03 - 1, OUT_D - WALL - 1, BASE_H - 5) * Box(8, WALL + 2, 6, align=MIN)))
     return out
 
@@ -533,7 +531,7 @@ def plate_labels():
     """(face, letters): port names beside their holes, positioned from them."""
     ports = {p[0]: p for p in PI_PORTS}
     hz = BOARD_Z + PI_T + HAT_GAP + HAT_T
-    jacks_top = max(hz - HAT_T + j[4] + HOLE_GAP for j in HAT_JACKS if j[0] in CUT_JACKS)
+    jacks_top = max(hz - HAT_T + j[4] + HOLE_GAP + JACK_SLACK for j in HAT_JACKS if j[0] in CUT_JACKS)
     out = [("back", JACK_NAMES[n], 4.0, (placed((a0 + a1) / 2, 0)[0], OUT_D, jacks_top + 4)) for n, a0, a1, *_ in HAT_JACKS if n in CUT_JACKS]
     usbc_z = BOARD_Z + sum(ports["USB-C"][3]) / 2
     low = (FLOOR + PLATE_LIFT + usbc_z - ports["USB-C"][6][1] / 2) / 2   # under the USB-C pocket
@@ -789,7 +787,7 @@ USES = [
     {"part": "standoff M2.5 M-F 6+6", "count": 4, "where": "Pi posts: stud down through the floor into a nut",
      "through": FLOOR, "length": 6.0, "into": "nut"},
     {"part": "nut M2.5", "count": 4, "where": "under the Pi posts"},
-    {"part": "standoff M2.5 M-F 20+6", "count": 4, "where": "Pi to DAC: stud down through the Pi into the base's standoffs",
+    {"part": "standoff M2.5 M-F 15+6", "count": 4, "where": "Pi to DAC: stud down through the Pi into the base's standoffs",
      "through": PI_T, "length": 6.0, "into": "metal", "depth": STANDOFF_H - 1},
     {"part": "screw M2.5x6", "count": 4, "where": "the DAC, down into its standoffs",
      "through": HAT_T, "into": "metal", "depth": 5.0},
