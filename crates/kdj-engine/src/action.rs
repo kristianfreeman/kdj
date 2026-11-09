@@ -77,6 +77,8 @@ pub enum Action {
     ZoomIn,
     ZoomOut,
     ToggleHud,
+    /// Open or close the sync view: both decks' beats, to beatmatch by hand.
+    SyncView,
     /// Move the keyboard to the other deck (two-deck harness).
     SwitchDeck,
     /// Open or close the settings screen.
@@ -137,6 +139,7 @@ impl Action {
             Self::ZoomIn
                 | Self::ZoomOut
                 | Self::ToggleHud
+                | Self::SyncView
                 | Self::SwitchDeck
                 | Self::Settings
                 | Self::Browse
@@ -203,6 +206,7 @@ impl Action {
             Self::ZoomIn => "ZOOM +",
             Self::ZoomOut => "ZOOM −",
             Self::ToggleHud => "HUD",
+            Self::SyncView => "SYNC VIEW",
             Self::SwitchDeck => "DECK",
             Self::Settings => "SETTINGS",
             Self::Browse => "BROWSE",

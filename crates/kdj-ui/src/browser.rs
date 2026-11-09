@@ -188,12 +188,12 @@ impl Browser {
             text.push_str(if self.scanning { "Reading library…" } else { "Plug in a Rekordbox USB stick" });
         } else {
             let titles: Vec<&str> = self.levels.iter().map(|l| l.title.trim()).collect();
-            fit_path(text, &titles, atlas, Style::Body, WIDTH - 200.0);
+            fit_path(text, &titles, atlas, Style::Body, WIDTH - 220.0);
         }
-        if self.levels.len() > 1 {
-            f.touch.add([0.0, 0.0, WIDTH - 180.0, 46.0], Target::Back);
-        }
-        atlas.draw(f, Style::Body, 16.0, 32.0, Align::Left, text, FG);
+        // Back: out a level, and from the top to the deck.
+        f.touch.add([0.0, 0.0, WIDTH - 180.0, 46.0], Target::Back);
+        back_chevron(f, 16.0, 26.0);
+        atlas.draw(f, Style::Body, 36.0, 32.0, Align::Left, text, FG);
         if let Some(l) = self.levels.last() {
             text.clear();
             let _ = write!(text, "{} items", l.items.len());
@@ -274,13 +274,7 @@ impl Browser {
             let _ = write!(text, "−{:02}:{:02}   {:.2} BPM", whole(remaining / 60.0), whole(remaining) % 60, s.bpm());
             atlas.draw(f, Style::Body, 48.0, fy + 29.0, Align::Left, text, FG);
         }
-        let hint = if !status.is_empty() {
-            status
-        } else if self.depth() > 1 {
-            "↵ open / load   ← back   tab close ×"
-        } else {
-            "↵ open / load   tab close ×"
-        };
+        let hint = if status.is_empty() { "push open / load   hold back   close ×" } else { status };
         atlas.draw(
             f,
             Style::Label,
@@ -291,6 +285,12 @@ impl Browser {
             if status.is_empty() { DIM } else { FG },
         );
     }
+}
+
+/// A "back" chevron, pointing left from `x`, centred on `y`.
+pub fn back_chevron(f: &mut Frame, x: f32, y: f32) {
+    f.tri([x + 9.0, y - 8.0], [x + 9.0, y + 8.0], [x, y], FG);
+    f.tri([x + 9.0, y - 4.5], [x + 9.0, y + 4.5], [x + 4.5, y], BG);
 }
 
 /// Column heads, for track lists. The key being mixed into sits beside KEY,

@@ -57,6 +57,7 @@ use kdj_library::{anlz, library};
 use kdj_ui::Ui;
 use kdj_ui::browser::{self, Browser};
 use kdj_ui::settings::{self, Settings};
+use kdj_ui::syncview::{DeckBeat, SyncView};
 use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Mod};
 use sdl2::mouse::MouseButton;
@@ -370,6 +371,10 @@ const fn refuses_load(s: &Snapshot) -> Option<&'static str> {
 /// How long a browse push is held to go back instead of opening or loading.
 const BACK_HOLD: Duration = Duration::from_millis(500);
 
+/// How often to tell the other kdjs where this kdj's beats are: often
+/// enough that tempo changes show at once.
+const BEATS_EVERY: Duration = Duration::from_millis(30);
+
 /// How long a power off / restart press waits for its confirming second press.
 const POWER_CONFIRM: Duration = Duration::from_secs(3);
 
@@ -387,6 +392,9 @@ struct App {
     hud: Hud,
     browser: Browser,
     settings: Settings,
+    sync_view: SyncView,
+    /// When this kdj last said where its decks' beats are.
+    beats_said: Instant,
     /// A power off / restart pressed once, waiting for the second press.
     armed: Option<(settings::Key, Instant)>,
     /// When a browse push went down: let go before `BACK_HOLD`, it loads.
@@ -440,6 +448,8 @@ impl App {
             hud: Hud::new(args.hud),
             browser: Browser::new(args.track.is_none() && !args.synth),
             settings: Settings::new(settings::pages(&settings::Prefs::default(), info)),
+            sync_view: SyncView::default(),
+            beats_said: Instant::now(),
             armed: None,
             load_held: None,
             libs: Vec::new(),
@@ -493,12 +503,19 @@ impl App {
             return;
         }
         // A controller's browse encoder has one push: let go, it opens or
-        // loads; held past BACK_HOLD, it backs out instead.
-        if a == Action::BrowseLoad && !self.settings.open {
+        // loads; held past BACK_HOLD, it backs out instead: settings to
+        // their pages and closed, the browser a level at a time and closed.
+        if a == Action::BrowseLoad {
             match e {
                 Edge::Press => self.load_held = Some(Instant::now()),
                 Edge::Release => match self.load_held.take() {
+                    Some(t) if t.elapsed() >= BACK_HOLD && self.settings.open => {
+                        self.settings_key(Action::Browse);
+                    }
                     Some(t) if t.elapsed() >= BACK_HOLD => self.act(Action::BrowseBack, Edge::Press, target),
+                    Some(_) if self.settings.open => {
+                        self.settings_key(Action::BrowseLoad);
+                    }
                     Some(_) if !self.browser.open => self.open_browser(),
                     Some(_) => self.open_selected(Some(target)),
                     None => {}
@@ -521,6 +538,10 @@ impl App {
             Action::ZoomIn => self.slots[target].ui.zoom(false),
             Action::ZoomOut => self.slots[target].ui.zoom(true),
             Action::ToggleHud => self.hud.on = !self.hud.on,
+            Action::SyncView => {
+                self.sync_view.open = !self.sync_view.open;
+                b.open = false;
+            }
             Action::SwitchDeck => self.set_focus((self.focus + 1) % self.slots.len()),
             Action::Browse => {
                 b.open = !b.open;
@@ -538,6 +559,8 @@ impl App {
             Action::BrowseEnter => self.open_selected(None),
             // One button browses: opens the browser, backs out a level, and
             // at the top closes it (a controller side has no room for two).
+            // Back from the sync view is to the deck.
+            Action::BrowseBack if !b.open && self.sync_view.open => self.sync_view.open = false,
             Action::BrowseBack if !b.open => {
                 b.open = true;
                 self.rescan_if_sources_changed();
@@ -682,6 +705,62 @@ impl App {
         let elsewhere = here.iter().enumerate().filter(|&(i, _)| i != self.focus).map(|(_, &d)| d).chain(others);
         self.browser.mixing_into = mix_into(elsewhere, here.get(self.focus).and_then(|d| d.key));
         self.browser.camelot = self.settings.choice(settings::Key::KeyNames) != Some(1);
+    }
+
+    /// Tell the other kdjs where the beats are on the decks here, and give
+    /// the sync view the focused deck and the one to match it with: the
+    /// other deck here, else one on another kdj (playing first), placed by
+    /// the Link session's beat, which both kdjs read alike.
+    fn follow_beats(&mut self) {
+        let first = self.net.as_ref().map_or(0, |n| n.decks().start);
+        let snaps: Vec<Snapshot> = self.slots.iter_mut().map(|s| s.deck.snapshot()).collect();
+        let letter = |i: usize| char::from(b'A' + u8::try_from(i.min(25)).unwrap_or(0));
+        if let Some(net) = &self.net
+            && self.beats_said.elapsed() >= BEATS_EVERY
+        {
+            self.beats_said = Instant::now();
+            let stamps: Vec<_> = snaps
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.track_frames > 0)
+                .filter_map(|(i, s)| {
+                    Some(net::BeatStamp {
+                        deck: u8::try_from(first + i).ok()?,
+                        playing: s.playing,
+                        beat: s.grid.beat_at(s.pos),
+                        link_beat: s.link_beat?,
+                        bpm: s.bpm(),
+                    })
+                })
+                .collect();
+            net.send_beats(&stamps);
+        }
+        if !self.sync_view.open {
+            return;
+        }
+        let beat = |i: usize, s: &Snapshot| {
+            (s.track_frames > 0).then(|| DeckBeat {
+                letter: letter(first + i),
+                beat: s.grid.beat_at(s.pos),
+                bpm: s.bpm(),
+                playing: s.playing,
+            })
+        };
+        let mine = &snaps[self.focus];
+        self.sync_view.mine = beat(self.focus, mine);
+        let here = snaps.iter().enumerate().filter(|&(i, _)| i != self.focus).find_map(|(i, s)| beat(i, s));
+        let elsewhere = || {
+            let (link_beat, link_bpm) = (mine.link_beat?, mine.link_bpm?);
+            let stamps = self.net.as_ref()?.beats_elsewhere();
+            let s = stamps.iter().max_by_key(|s| (s.playing, std::cmp::Reverse(s.deck)))?;
+            Some(DeckBeat {
+                letter: letter(usize::from(s.deck)),
+                beat: s.beat_at(link_beat, link_bpm),
+                bpm: s.bpm,
+                playing: s.playing,
+            })
+        };
+        self.sync_view.other = here.or_else(elsewhere);
     }
 
     /// Each deck's "from B", and on this kdj's decks a warning while another
@@ -934,6 +1013,7 @@ fn run() -> Result<()> {
         app.follow_net();
         app.follow_network();
         app.follow_keys();
+        app.follow_beats();
         if let Ok(scan) = scan_rx.try_recv() {
             app.take_libraries(scan);
         }
@@ -1459,6 +1539,7 @@ fn draw_decks(app: &mut App, snaps: &[Snapshot], size: (u32, u32), hud_text: &st
         let overlay = match (focused, app.settings.open) {
             (false, _) => kdj_ui::Overlay::None,
             (true, true) => kdj_ui::Overlay::Settings(&mut app.settings),
+            (true, false) if !app.browser.open && app.sync_view.open => kdj_ui::Overlay::SyncView(&mut app.sync_view),
             (true, false) => kdj_ui::Overlay::Browser(&mut app.browser),
         };
         let hud = if i == 0 { hud_text } else { "" };

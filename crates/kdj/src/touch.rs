@@ -4,7 +4,10 @@
 //! A button presses on touch and releases on lift (CUE previews while held).
 //! The overview needle-searches while the deck is stopped. In the browser, a
 //! row highlights on the first tap and opens or loads on the second; dragging
-//! scrolls.
+//! scrolls. A double tap on the deck screen, anywhere but a control, opens
+//! the sync view, and one on the sync view closes it.
+
+use std::time::{Duration, Instant};
 
 use kdj_engine::{Action, Edge};
 use kdj_ui::browser::ROW_H;
@@ -14,10 +17,15 @@ use crate::App;
 
 /// Movement (logical px) before a touch on a row counts as a drag.
 const DRAG_PX: f32 = 10.0;
+/// Two taps this close in time and place make a double tap.
+const DOUBLE_TAP: Duration = Duration::from_millis(350);
+const DOUBLE_TAP_PX: f32 = 60.0;
 
 #[derive(Debug, Default)]
 pub struct Touch {
     down: Option<Down>,
+    /// The last tap on no control, and where: half a double tap.
+    last_tap: Option<(Instant, [f32; 2])>,
 }
 
 #[derive(Debug)]
@@ -34,7 +42,10 @@ impl Touch {
         if slot != app.focus && !app.browser.open {
             app.set_focus(slot);
         }
-        let Some(hit) = app.slots.get(slot).and_then(|s| s.ui.hit(x, y)) else { return };
+        let Some(hit) = app.slots.get(slot).and_then(|s| s.ui.hit(x, y)) else {
+            self.tap_nothing(app, [x, y]);
+            return;
+        };
         match hit.target {
             Target::Action(a) => app.act(a, Edge::Press, slot),
             Target::Needle => {
@@ -43,6 +54,20 @@ impl Touch {
             Target::Row(_) | Target::Back | Target::Page(_) | Target::Choice(..) | Target::Setting(_) => {}
         }
         self.down = Some(Down { slot, hit, start_y: y, scrolled: None });
+    }
+
+    /// A tap on no control: the second of a double tap on the deck screen
+    /// or the sync view opens or closes the sync view.
+    fn tap_nothing(&mut self, app: &mut App, at: [f32; 2]) {
+        if app.browser.open || app.settings.open {
+            return;
+        }
+        let near = |p: [f32; 2]| (p[0] - at[0]).hypot(p[1] - at[1]) < DOUBLE_TAP_PX;
+        if self.last_tap.take().is_some_and(|(t, p)| t.elapsed() < DOUBLE_TAP && near(p)) {
+            app.act(Action::SyncView, Edge::Press, app.focus);
+        } else {
+            self.last_tap = Some((Instant::now(), at));
+        }
     }
 
     /// The finger moved (while down).

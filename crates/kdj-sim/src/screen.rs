@@ -108,6 +108,14 @@ impl Screen {
         write_png(path, w, h, &rgba)
     }
 
+    /// Render the sync view.
+    pub fn save_sync_view_png(&mut self, path: &Path, view: &mut kdj_ui::syncview::SyncView) -> Result<()> {
+        view.open = true;
+        self.ui.build(&Snapshot::default(), None, kdj_ui::Overlay::SyncView(view), "", "");
+        let (w, h, rgba) = self.ui.snapshot_rgba()?;
+        write_png(path, w, h, &rgba)
+    }
+
     /// Render the settings screen.
     pub fn save_settings_png(
         &mut self,

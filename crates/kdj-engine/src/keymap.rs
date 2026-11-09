@@ -57,6 +57,7 @@ const DEFAULT: &[(&str, Action)] = {
         ("Z", ZoomOut),
         ("X", ZoomIn),
         ("`", ToggleHud),
+        ("V", Action::SyncView),
         ("S", Action::Sync),
         ("M", Action::Master),
         ("Tab", Browse),

@@ -307,7 +307,10 @@ impl Settings {
             self.draw_mapping(f, atlas);
             return;
         }
-        atlas.draw(f, Style::Body, 16.0, 30.0, Align::Left, "Settings", FG);
+        // Back: to the page list, then out.
+        crate::browser::back_chevron(f, 16.0, 24.0);
+        f.touch.add([0.0, 0.0, 220.0, 46.0], Target::Action(kdj_engine::Action::Browse));
+        atlas.draw(f, Style::Body, 36.0, 30.0, Align::Left, "Settings", FG);
         atlas.draw(f, Style::Label, WIDTH - 16.0, 30.0, Align::Right, concat!("kdj ", env!("CARGO_PKG_VERSION")), DIM);
         f.rect(16.0, 46.0, WIDTH - 32.0, 1.0, FAINT);
         self.page_list(f, atlas);
@@ -373,8 +376,8 @@ impl Settings {
             atlas.draw_clipped(f, Style::Label, 16.0, fy + 28.0, 300.0, status, FG);
         }
         let hint = match self.column {
-            Column::Pages => "↑↓ page   → settings   esc close ×",
-            Column::Rows => "↑↓ setting   ←→ change   ↵ open   esc back",
+            Column::Pages => "turn page   push open   hold close ×",
+            Column::Rows => "turn setting   push change   hold back",
         };
         atlas.draw(f, Style::Label, WIDTH - 16.0, fy + 28.0, Align::Right, hint, DIM);
         f.touch.add([WIDTH - 220.0, fy + 4.0, 220.0, 40.0], Target::Action(kdj_engine::Action::Settings));

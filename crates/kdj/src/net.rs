@@ -47,6 +47,9 @@ const PEER_TIMEOUT: Duration = Duration::from_secs(5);
 /// A kdj's hellos stop coming from the address its controls go to for this
 /// long (its cable unplugged, say): send them to one they still come from.
 const ADDR_TIMEOUT: Duration = Duration::from_secs(2);
+/// A deck's beats not heard for this long are forgotten (they come many
+/// times a second).
+const BEATS_TIMEOUT: Duration = Duration::from_millis(500);
 /// How long a kdj listens before claiming a letter (over a hello's interval,
 /// so everyone already up has been heard).
 const CLAIM_WAIT: Duration = Duration::from_millis(1500);
@@ -120,11 +123,71 @@ enum Packet<'a> {
     Midi(&'a [u8]),
     /// An LED message for the receiver's controller.
     Led(&'a [u8]),
+    /// Where the sender's decks' beats are (see `BeatStamp`).
+    Beats(&'a [u8]),
+}
+
+/// Where a deck's beat is against the Link session's beat: a clock every
+/// kdj on the session reads alike, so another kdj can work out where the
+/// deck's beat is at any moment from its own reading (`beat_at`). Sent
+/// many times a second, for the sync view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BeatStamp {
+    /// Its letter (0 = A).
+    pub deck: u8,
+    pub playing: bool,
+    /// Its grid's beat when the session was at `link_beat`.
+    pub beat: f64,
+    pub link_beat: f64,
+    /// Its tempo as it plays.
+    pub bpm: f64,
+}
+
+impl BeatStamp {
+    const LEN: usize = 2 + 3 * 8;
+
+    /// Its beat when the session is at `link_beat`, at `link_bpm`.
+    #[must_use]
+    pub fn beat_at(&self, link_beat: f64, link_bpm: f64) -> f64 {
+        if self.playing && link_bpm > 0.0 {
+            ((link_beat - self.link_beat) * self.bpm / link_bpm) + self.beat
+        } else {
+            self.beat
+        }
+    }
+}
+
+fn encode_beats(stamps: &[BeatStamp]) -> Vec<u8> {
+    let stamps = &stamps[..stamps.len().min(MAX_DECKS)];
+    let mut b = Vec::with_capacity(MAGIC.len() + 2 + stamps.len() * BeatStamp::LEN);
+    b.extend_from_slice(&MAGIC);
+    b.extend_from_slice(&[BEATS, u8::try_from(stamps.len()).unwrap_or(0)]);
+    for s in stamps {
+        b.extend_from_slice(&[s.deck, u8::from(s.playing)]);
+        for v in [s.beat, s.link_beat, s.bpm] {
+            b.extend_from_slice(&v.to_be_bytes());
+        }
+    }
+    b
+}
+
+/// The stamps in a `Packet::Beats`; None if it's cut short.
+fn decode_beats(b: &[u8]) -> Option<Vec<BeatStamp>> {
+    let mut r = Reader(b);
+    let n = r.u8()?;
+    (0..n)
+        .map(|_| {
+            let (deck, playing) = (r.u8()?, r.u8()? != 0);
+            let mut f = || r.u64().map(f64::from_bits);
+            Some(BeatStamp { deck, playing, beat: f()?, link_beat: f()?, bpm: f()? })
+        })
+        .collect()
 }
 
 const HELLO: u8 = b'H';
 const MIDI: u8 = b'M';
 const LED: u8 = b'L';
+const BEATS: u8 = b'B';
 
 /// A hello's longest name (host names are at most 63 bytes a label).
 const MAX_NAME: usize = 63;
@@ -235,6 +298,7 @@ fn decode(b: &[u8]) -> Option<Packet<'_>> {
         HELLO => decode_hello(rest).map(Packet::Hello),
         MIDI if !rest.is_empty() => Some(Packet::Midi(rest)),
         LED if !rest.is_empty() => Some(Packet::Led(rest)),
+        BEATS => Some(Packet::Beats(rest)),
         _ => None,
     }
 }
@@ -339,6 +403,8 @@ struct State {
     master_logged: Option<String>,
     using: Vec<Use>,
     on_deck: Vec<OnDeck>,
+    /// The other kdjs' decks' beats, by letter, and when they came.
+    beats: Vec<(BeatStamp, Instant)>,
 }
 
 /// Something to run on a controller message from another kdj.
@@ -521,6 +587,19 @@ impl Net {
         for p in &self.state().peers {
             let _ = self.data.send_to(&b[..len], p.addr);
         }
+    }
+
+    /// Say where this kdj's decks' beats are, to every other kdj.
+    pub fn send_beats(&self, stamps: &[BeatStamp]) {
+        let b = encode_beats(stamps);
+        for p in self.state().peers.iter().filter(|p| p.hello.count > 0) {
+            let _ = self.data.send_to(&b, p.addr);
+        }
+    }
+
+    /// The other kdjs' decks' beats, as last heard, if lately.
+    pub fn beats_elsewhere(&self) -> Vec<BeatStamp> {
+        self.state().beats.iter().filter(|(_, at)| at.elapsed() < BEATS_TIMEOUT).map(|&(s, _)| s).collect()
     }
 
     /// Send an LED message to the kdjs the controller is plugged into.
@@ -763,7 +842,7 @@ impl Net {
 
     /// Take controls and LEDs from the other kdjs.
     fn receive(&self, sock: &UdpSocket) {
-        let mut buf = [0; 64];
+        let mut buf = [0; 256];
         loop {
             let Ok((n, from)) = sock.recv_from(&mut buf) else {
                 std::thread::sleep(RETRY);
@@ -780,6 +859,13 @@ impl Net {
                     if let Some(sink) = self.led_sink.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
                         let _ = sink.send(msg.to_vec());
                     }
+                }
+                Some(Packet::Beats(b)) if known => {
+                    let Some(stamps) = decode_beats(b) else { continue };
+                    let now = Instant::now();
+                    let mut s = self.state();
+                    s.beats.retain(|(old, _)| !stamps.iter().any(|n| n.deck == old.deck));
+                    s.beats.extend(stamps.into_iter().map(|n| (n, now)));
                 }
                 _ => {}
             }
@@ -878,6 +964,16 @@ mod tests {
     }
 
     #[test]
+    fn a_beat_heard_is_placed_by_the_session_beat() {
+        // B plays at 125 on a session at 124: by session beat 1008 (4.5 of
+        // its beats later) it's moved on 4.5 × 125 / 124 beats.
+        let b = BeatStamp { deck: 1, playing: true, beat: 64.25, link_beat: 1003.5, bpm: 125.0 };
+        assert!((b.beat_at(1008.0, 124.0) - (64.25 + 4.5 * 125.0 / 124.0)).abs() < 1e-9);
+        let stopped = BeatStamp { playing: false, ..b };
+        assert!((stopped.beat_at(1008.0, 124.0) - 64.25).abs() < f64::EPSILON, "stopped, it stays");
+    }
+
+    #[test]
     fn packets_round_trip() {
         let h = Hello {
             name: "kdj-oak-pike".into(),
@@ -913,6 +1009,14 @@ mod tests {
         assert_eq!(cut.name, "é".repeat(31), "cut to 63 bytes, on a character boundary");
         let (b, len) = encode(MIDI, &[0x9e, 24, 127]).expect("fits");
         assert_eq!(decode(&b[..len]), Some(Packet::Midi(&[0x9e, 24, 127])));
+        let stamps = [
+            BeatStamp { deck: 1, playing: true, beat: 64.25, link_beat: 1003.5, bpm: 124.6 },
+            BeatStamp { deck: 2, playing: false, beat: -3.0, link_beat: 1003.5, bpm: 0.0 },
+        ];
+        let b = encode_beats(&stamps);
+        let Some(Packet::Beats(rest)) = decode(&b) else { panic!("beats decode") };
+        assert_eq!(decode_beats(rest), Some(stamps.to_vec()));
+        assert_eq!(decode_beats(&rest[..rest.len() - 1]), None, "cut short");
         let (b, len) = encode(LED, &[0x9e, 24, 0]).expect("fits");
         assert_eq!(decode(&b[..len]), Some(Packet::Led(&[0x9e, 24, 0])));
         assert_eq!(encode(MIDI, &[0; 4]), None, "not a MIDI message");

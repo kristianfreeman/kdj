@@ -192,6 +192,10 @@ pub struct Snapshot {
     /// Where our beat falls against the shared timeline's, in its beats
     /// within ±½, while playing on one.
     pub link_phase: Option<f64>,
+    /// The shared timeline's beat at `pos` (as heard): a clock every kdj
+    /// on the session reads alike, SYNC on or off, so another kdj can tell
+    /// where this deck's beat is (see `kdj`'s sync view).
+    pub link_beat: Option<f64>,
 }
 
 impl Snapshot {
@@ -599,7 +603,10 @@ impl Engine {
             self.nudge.settle();
         }
         self.clock += n as u64;
-        let snap = self.snapshot_now();
+        let mut snap = self.snapshot_now();
+        // The timeline was heard at the block's first frame; `pos` is past its last.
+        let secs = frames_f64(n) / f64::from(self.grid.sample_rate);
+        snap.link_beat = self.link.timeline.map(|t| (secs * t.bpm / 60.0) + t.beat);
         self.snapshot.write(snap);
     }
 
@@ -1174,6 +1181,7 @@ impl Engine {
             link_bpm: self.link.timeline.map(|t| t.bpm),
             link_peers: self.link.timeline.and_then(|t| t.peers),
             link_phase: self.link.phase,
+            link_beat: None,
         }
     }
 }
@@ -1216,6 +1224,7 @@ impl Snapshot {
             link_bpm: None,
             link_peers: None,
             link_phase: None,
+            link_beat: None,
         }
     }
 }

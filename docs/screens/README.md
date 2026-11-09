@@ -144,6 +144,28 @@ Every screen of the deck at the panel's own 800×480, drawn by the real UI code 
 
 ![System](settings-system.png)
 
+## Sync view
+
+**Tempos apart**: B is 0.6 BPM fast: the figure keeps turning.
+
+![Tempos apart](sync-view-tempos-apart.png)
+
+**Quarter of a beat out**: Same tempo, B 121 ms ahead: a circle.
+
+![Quarter of a beat out](sync-view-quarter-of-a-beat-out.png)
+
+**Nearly there**: Same tempo, B 15 ms behind: closing on the diagonal.
+
+![Nearly there](sync-view-nearly-there.png)
+
+**In phase**: Matched: the figure folds onto the diagonal and pulses on the beat.
+
+![In phase](sync-view-in-phase.png)
+
+**Alone**: No other deck playing.
+
+![Alone](sync-view-alone.png)
+
 ## Mapping
 
 **Xone:K3**: config/xone-k3.toml: deck A's columns filled, deck B's outlined; unused pots and faders faint.

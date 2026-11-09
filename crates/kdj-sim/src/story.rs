@@ -67,6 +67,7 @@ pub fn run(opts: &Opts) -> Result<bool> {
     deck_stories(&mut book)?;
     browser_stories(&mut book)?;
     settings_stories(&mut book)?;
+    sync_view_stories(&mut book)?;
     mapping_stories(&mut book)?;
     // Screens that are gone go too (and files from before names were stable).
     for e in std::fs::read_dir(&out)?.flatten() {
@@ -290,6 +291,32 @@ fn browser_stories(book: &mut Book) -> Result<()> {
     b.scanning = false;
     let file = book.add("Browser", "Nothing to browse", "No collection, no stick.");
     book.screen.save_browser_status_png(&file, &mut b, &snap, "")?;
+    Ok(())
+}
+
+/// The sync view as two decks come together: deck A at 124, deck B
+/// arriving at it.
+fn sync_view_stories(book: &mut Book) -> Result<()> {
+    use kdj_ui::syncview::{DeckBeat, SyncView};
+    let deck = |letter, beat, bpm| DeckBeat { letter, beat, bpm, playing: true };
+    let a = deck('A', 64.0, 124.0);
+    let stories = [
+        ("Tempos apart", "B is 0.6 BPM fast: the figure keeps turning.", Some(deck('B', 31.82, 124.6))),
+        ("Quarter of a beat out", "Same tempo, B 121 ms ahead: a circle.", Some(deck('B', 32.25, 124.0))),
+        ("Nearly there", "Same tempo, B 15 ms behind: closing on the diagonal.", Some(deck('B', 31.97, 124.0))),
+        (
+            "In phase",
+            "Matched: the figure folds onto the diagonal and pulses on the beat.",
+            Some(deck('B', 32.0, 124.0)),
+        ),
+        ("Alone", "No other deck playing.", None),
+    ];
+    for (name, note, other) in stories {
+        let mut v = SyncView::default();
+        (v.mine, v.other) = (Some(a), other);
+        let file = book.add("Sync view", name, note);
+        book.screen.save_sync_view_png(&file, &mut v)?;
+    }
     Ok(())
 }
 

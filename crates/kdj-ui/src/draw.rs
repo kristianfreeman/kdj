@@ -84,6 +84,32 @@ impl Frame {
         }
     }
 
+    /// A straight line `width` wide from `a` to `b`.
+    pub fn line(&mut self, a: [f32; 2], b: [f32; 2], width: f32, color: Rgba) {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let len = dx.hypot(dy);
+        if len <= f32::EPSILON {
+            return;
+        }
+        let (nx, ny) = (-dy / len * width / 2.0, dx / len * width / 2.0);
+        let (a0, a1) = ([a[0] + nx, a[1] + ny], [a[0] - nx, a[1] - ny]);
+        let (b0, b1) = ([b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny]);
+        self.tri(a0, a1, b0, color);
+        self.tri(a1, b1, b0, color);
+    }
+
+    /// A filled circle.
+    pub fn disc(&mut self, [cx, cy]: [f32; 2], r: f32, color: Rgba) {
+        const SIDES: u16 = 24;
+        let at = |i: u16| {
+            let t = f32::from(i) / f32::from(SIDES) * std::f32::consts::TAU;
+            [r.mul_add(t.cos(), cx), r.mul_add(t.sin(), cy)]
+        };
+        for i in 0..SIDES {
+            self.tri([cx, cy], at(i), at(i + 1), color);
+        }
+    }
+
     /// `rect` is [x, y, w, h]; `uv` is [u0, v0, u1, v1].
     pub fn quad(&mut self, rect: [f32; 4], uv: [f32; 4], color: Rgba, fill: Fill) {
         self.verts.extend_from_slice(&quad_vertices(rect, uv, color, fill));

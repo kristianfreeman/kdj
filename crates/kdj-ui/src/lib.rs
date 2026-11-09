@@ -7,6 +7,7 @@ pub mod draw;
 pub mod gpu;
 pub mod scene;
 pub mod settings;
+pub mod syncview;
 pub mod text;
 pub mod touch;
 
@@ -23,6 +24,7 @@ pub enum Overlay<'a> {
     None,
     Browser(&'a mut browser::Browser),
     Settings(&'a mut settings::Settings),
+    SyncView(&'a mut syncview::SyncView),
 }
 
 #[derive(Debug)]
@@ -87,6 +89,11 @@ impl Ui {
             Overlay::Browser(b) if b.open => {
                 self.scene.frame.clear();
                 b.draw(&mut self.scene.frame, &self.atlas, snap, status);
+                return t.elapsed();
+            }
+            Overlay::SyncView(v) if v.open => {
+                self.scene.frame.clear();
+                v.draw(&mut self.scene.frame, &self.atlas);
                 return t.elapsed();
             }
             _ => {}
